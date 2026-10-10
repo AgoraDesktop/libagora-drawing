@@ -17,9 +17,13 @@
 #include <CoreGraphics/CGDataConsumer.h>
 #include <CoreGraphics/CGLayer.h>
 
+/* THE COLOUR IS A REAL CORE FOUNDATION TYPE, so its identity is the one Core Foundation assigned it
+ * at registration rather than a constant from the table below (CGTypeID_internal.h records the
+ * agreement this makes; CGColor.c does the registering). The other doors still answer table
+ * constants because their classes are still opaque C structs. */
 CGTypeID CGColorGetTypeID(void)
 {
-	return (CGTypeID)CG_TYPE_ID_CGCOLOR;
+	return (CGTypeID)cg_color_type_id();
 }
 
 CGTypeID CGColorSpaceGetTypeID(void)

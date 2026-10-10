@@ -42,7 +42,13 @@ file(CREATE_LINK "${CMAKE_CURRENT_SOURCE_DIR}" "${_agora_include_dir}/CoreGraphi
 # ---------------------------------------------------------------------------
 file(GLOB DRAWING_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.c")
 
-add_library(Drawing ${DRAWING_SOURCES})
+# AGORA: EVERY LIBRARY IN THIS TREE IS SHARED. A consumer loads the whole .so, so an
+# Objective-C category in it is registered whether or not anything references its symbols
+# (a static archive drops such members and the categories silently stop answering) and a
+# single copy of the runtime state is shared instead of one per binary. See README.md.
+option(BUILD_SHARED_LIBS "Build shared libraries" ON)
+
+add_library(Drawing SHARED ${DRAWING_SOURCES})
 
 set_target_properties(Drawing PROPERTIES OUTPUT_NAME agora-drawing)
 

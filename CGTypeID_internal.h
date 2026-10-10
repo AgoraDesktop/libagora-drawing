@@ -13,8 +13,16 @@
  * is what `CFGetTypeID` would compare against — and the VALUES are not, because Apple's are assigned by its
  * runtime at load time and appear in no header or documentation. A caller can therefore compare ids (ours
  * against ours) exactly as Apple's documentation describes, and cannot port a constant, which no caller
- * does. THE TREE HAS NO COREFOUNDATION, so there is no `CFGetTypeID` to agree with; when one exists, the
- * agreement to make is that it answers THESE numbers for these classes.
+ * does. **THE TREE NOW HAS A COREFOUNDATION (2026-10-10), AND THE AGREEMENT IT ASKED FOR IS NOT ACHIEVABLE
+ * IN THE DIRECTION IT NAMED.** This file was written when there was no `CFGetTypeID` to agree with, and it
+ * said that when one existed, the agreement to make would be that `CFGetTypeID` answers THESE numbers.
+ * Core Foundation assigns its type ids at registration, from 256 up, and a class cannot be given one of the
+ * numbers below -- 1 through 255 belong to Core Foundation's own classes. SO THE AGREEMENT IS MADE THE OTHER
+ * WAY ROUND, ONE CLASS AT A TIME: A CLASS THAT IS A CORE FOUNDATION TYPE ANSWERS CORE FOUNDATION'S ID, and
+ * its constant below is superseded. `CGColor` is the first, because it is the first class that IS one (see
+ * CGColor.c); the rest still answer their constants, because they are still opaque C structs. A caller
+ * comparing `CGColorGetTypeID()` against `CFGetTypeID()` gets the same answer either way, which is the
+ * property the table exists for.
  *
  * ONE IS NOT ZERO, AND ZERO IS THE INVALID ID: the numbering starts at 1 so that a zeroed structure, an
  * uninitialised field or a refusal can never be mistaken for a class identity.
@@ -23,6 +31,12 @@
 #define CORE_GRAPHICS_CGTYPEID_INTERNAL_H
 
 #include <CoreGraphics/CGBase.h>
+
+#include <CoreFoundation/CFBase.h>
+
+/* The colour's identity, assigned by Core Foundation when its class is registered (CGColor.c).
+ * CGTypeID.c's `CGColorGetTypeID` is the public door; this is what it answers with. */
+CFTypeID cg_color_type_id(void);
 
 /* THE TABLE. Adding a class means adding a line HERE and a door in CGTypeID.c — which is the whole point of
  * one file owning it: no id is ever picked at a call site. */

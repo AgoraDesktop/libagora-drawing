@@ -86,7 +86,10 @@ static const CFRuntimeClass cg_color_class = {
 	0                   /* requiredAlignment */
 };
 
-CFTypeID CGColorGetTypeID(void)
+/* THE REGISTRATION, NOT THE DOOR: `CGColorGetTypeID` is CGTypeID.c's — that file owns every
+ * `CG*GetTypeID` in this library — and it answers by calling this. What lives here is the one
+ * call to Core Foundation that gives the colour its identity. */
+CFTypeID cg_color_type_id(void)
 {
 	static CFTypeID type_id = 0;
 
@@ -100,7 +103,7 @@ CFTypeID CGColorGetTypeID(void)
  * of 1 and zeroes the extra bytes, so a create door only has to fill the fields. */
 static struct __CGColor *cg_color_alloc(void)
 {
-	return (struct __CGColor *)_CFRuntimeCreateInstance(kCFAllocatorDefault, CGColorGetTypeID(),
+	return (struct __CGColor *)_CFRuntimeCreateInstance(kCFAllocatorDefault, cg_color_type_id(),
 			(CFIndex)(sizeof(struct __CGColor) - sizeof(CFRuntimeBase)), NULL);
 }
 
