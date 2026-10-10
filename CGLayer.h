@@ -27,6 +27,8 @@
 #ifndef CORE_GRAPHICS_CGLAYER_H
 #define CORE_GRAPHICS_CGLAYER_H
 
+#include <CoreFoundation/CoreFoundation.h>
+
 #include <CoreGraphics/CGBase.h>
 #include <CoreGraphics/CGContext.h>
 
@@ -38,7 +40,7 @@ typedef struct CGLayer *CGLayerRef;
 
 /* THE LAYER'S SURFACE IS THIS LIBRARY'S ONLY BITMAP CHART, whatever the creating context was; see the note
  * above. The SIZE is in the creating context's user space and is rounded up to whole pixels. */
-CGLayerRef CGLayerCreateWithContext(CGContextRef context, CGSize size, NSDictionary *auxiliaryInfo);
+CGLayerRef CGLayerCreateWithContext(CGContextRef context, CGSize size, CFDictionaryRef auxiliaryInfo);
 
 /* THE CONTEXT OWNS ITS SURFACE AND THE LAYER OWNS THE CONTEXT, so a caller may draw into the returned context
  * but must not release it: `CGLayerRelease` does that. */

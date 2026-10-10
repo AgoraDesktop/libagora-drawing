@@ -23,6 +23,8 @@
 #ifndef CORE_GRAPHICS_CGDATACONSUMER_H
 #define CORE_GRAPHICS_CGDATACONSUMER_H
 
+#include <CoreFoundation/CoreFoundation.h>
+
 #include <CoreGraphics/CGBase.h>
 
 #include <stddef.h>
@@ -44,11 +46,11 @@ typedef struct CGDataConsumerCallbacks {
 CGDataConsumerRef CGDataConsumerCreate(void *info, const CGDataConsumerCallbacks *callbacks);
 
 /* APPENDS TO THE MUTABLE DATA, which is retained for the consumer's life. */
-CGDataConsumerRef CGDataConsumerCreateWithCFData(NSMutableData *data);
+CGDataConsumerRef CGDataConsumerCreateWithCFData(CFMutableDataRef data);
 
 /* WRITES TO THE FILE A FILE URL NAMES, truncating it, and REFUSES every other scheme by name: this library
  * writes local files. The mutable-data form is the one to use when the bytes should not touch the disk. */
-CGDataConsumerRef CGDataConsumerCreateWithURL(NSURL *url);
+CGDataConsumerRef CGDataConsumerCreateWithURL(CFURLRef url);
 
 /* HOW MANY BYTES THE CONSUMER TOOK — FEWER THAN OFFERED, OR ZERO, MEANS IT IS FULL, and a caller writing a
  * stream stops there rather than assuming its data landed. */

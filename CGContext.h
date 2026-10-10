@@ -41,6 +41,8 @@
 #ifndef CORE_GRAPHICS_CGCONTEXT_H
 #define CORE_GRAPHICS_CGCONTEXT_H
 
+#include <CoreFoundation/CoreFoundation.h>
+
 #include <CoreGraphics/CGBase.h>
 #include <CoreGraphics/CGAffineTransform.h>
 #include <CoreGraphics/CGColor.h>
@@ -164,8 +166,8 @@ void CGContextSaveGState(CGContextRef context);
  * `auxiliaryInfo` is Apple's reserved parameter and is accepted and ignored, as the same parameter is on
  * CGLayer. `...WithRect` is "identical except that the content of the transparency layer will be bounded by
  * `rect`", which is implemented by intersecting the clip, since the clip is what bounds both halves. */
-void CGContextBeginTransparencyLayer(CGContextRef c, NSDictionary *auxiliaryInfo);
-void CGContextBeginTransparencyLayerWithRect(CGContextRef c, CGRect rect, NSDictionary *auxiliaryInfo);
+void CGContextBeginTransparencyLayer(CGContextRef c, CFDictionaryRef auxiliaryInfo);
+void CGContextBeginTransparencyLayerWithRect(CGContextRef c, CGRect rect, CFDictionaryRef auxiliaryInfo);
 void CGContextEndTransparencyLayer(CGContextRef c);
 void CGContextRestoreGState(CGContextRef context);
 

@@ -4,11 +4,8 @@
  * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
  * SPDX-License-Identifier: MIT
  *
- * THE FIRST OBJECTIVE-C IN THIS LIBRARY, AND THE REASON IS THE SIGNATURE. Apple names its system
- * spaces with `CFStringRef` constants and reaches them through `CGColorSpaceCreateWithName`, so
- * duplicating that API means names — and this tree spells them `NSString *`, because the
- * retracted CoreFoundation plan settled that CoreGraphics here declares its signatures with
- * FOUNDATION types rather than inventing a CF layer.
+ * THE NAMES ARE `CFStringRef`, WHICH IS APPLE'S OWN SIGNATURE: Agora's Core Graphics depends on Core
+ * Foundation, so the Fiwix tree's `NSString *` is gone and this file is C (PROVENANCE.md).
  *
  * THE REST OF THE LIBRARY DOES NOT KNOW THIS FILE EXISTS. `CGColorSpace.h` declares the parameters
  * and the constants as `NSString *` with an opaque spelling under a C compiler, and this is the
@@ -53,7 +50,7 @@
  * (the sweep's `--check` verifies exactly that and nothing more), so "simply not implemented yet" and
  * "shipped" are both true of one row, and this file is where the second half lives.
  */
-#import <Foundation/Foundation.h>
+#include <CoreFoundation/CoreFoundation.h>
 
 #include <CoreGraphics/CGColorSpace.h>
 #include <CoreGraphics/CGColorSpace_internal.h>
@@ -66,14 +63,14 @@
  * string a caller gets by printing one, and a caller who wrote this value to a file and read it back
  * is reading a name this library chose — which is what a name is for. What must hold is that
  * CGColorSpaceCreateWithName accepts the value it was handed, which is why the name IS the value. */
-NSString *const kCGColorSpaceGenericGray = @"kCGColorSpaceGenericGray";
-NSString *const kCGColorSpaceGenericRGB = @"kCGColorSpaceGenericRGB";
-NSString *const kCGColorSpaceGenericCMYK = @"kCGColorSpaceGenericCMYK";
-NSString *const kCGColorSpaceGenericRGBLinear = @"kCGColorSpaceGenericRGBLinear";
+const CFStringRef kCGColorSpaceGenericGray = CFSTR("kCGColorSpaceGenericGray");
+const CFStringRef kCGColorSpaceGenericRGB = CFSTR("kCGColorSpaceGenericRGB");
+const CFStringRef kCGColorSpaceGenericCMYK = CFSTR("kCGColorSpaceGenericCMYK");
+const CFStringRef kCGColorSpaceGenericRGBLinear = CFSTR("kCGColorSpaceGenericRGBLinear");
 
-NSString *const kCGColorSpaceSRGB = @"kCGColorSpaceSRGB";
-NSString *const kCGColorSpaceAdobeRGB1998 = @"kCGColorSpaceAdobeRGB1998";
-NSString *const kCGColorSpaceGenericGrayGamma2_2 = @"kCGColorSpaceGenericGrayGamma2_2";
+const CFStringRef kCGColorSpaceSRGB = CFSTR("kCGColorSpaceSRGB");
+const CFStringRef kCGColorSpaceAdobeRGB1998 = CFSTR("kCGColorSpaceAdobeRGB1998");
+const CFStringRef kCGColorSpaceGenericGrayGamma2_2 = CFSTR("kCGColorSpaceGenericGrayGamma2_2");
 
 /* An xy pair with Y = 1, which is the spelling the engine's primaries use. */
 static cmsCIExyY cg_xy(double x, double y)
@@ -140,12 +137,12 @@ static cmsHPROFILE cg_rgb_profile(double wx, double wy, double rx, double ry, do
  * THEM: the sRGB curve's TOE — 0.02 decoding to 0.00444444 inside it against 0.0068 outside — was
  * how a piecewise space was told apart from a power curve, and no remaining name needs it. */
 
-static cmsHPROFILE cg_profile_for_name(NSString *name, CGColorSpaceModel *model, size_t *components)
+static cmsHPROFILE cg_profile_for_name(CFStringRef name, CGColorSpaceModel *model, size_t *components)
 {
 	cmsToneCurve *g;
 	cmsCIExyY wp;
 	cmsHPROFILE p;
-	if ([name isEqual:kCGColorSpaceSRGB]) {
+	if (CFEqual(name, kCGColorSpaceSRGB)) {
 		*model = kCGColorSpaceModelRGB;
 		*components = 3;
 		return cmsCreate_sRGBProfile();
@@ -155,7 +152,7 @@ static cmsHPROFILE cg_profile_for_name(NSString *name, CGColorSpaceModel *model,
 	 * era, so `CGColorSpaceCreateWithName` no longer answers to those names. THE DEFINITIONS ARE
 	 * IN HISTORY — DCI-P3's own white point and gamma 2.6, Display P3's P3 primaries with the sRGB
 	 * curve, the linear forms' gamma 1 — each measured when it was built rather than recalled. */
-	if ([name isEqual:kCGColorSpaceAdobeRGB1998]) {
+	if (CFEqual(name, kCGColorSpaceAdobeRGB1998)) {
 		*model = kCGColorSpaceModelRGB;
 		*components = 3;
 		return cg_rgb_profile(CG_D65_X, CG_D65_Y, 0.6400, 0.3300, 0.2100, 0.7100, 0.1500, 0.0600,
@@ -165,7 +162,7 @@ static cmsHPROFILE cg_profile_for_name(NSString *name, CGColorSpaceModel *model,
 	 * generic Lab (10.13), generic XYZ (10.11) and ITU-R BT.2020 (10.11). LAB IS STILL REACHABLE
 	 * WITHOUT A NAME — through `CGColorSpaceCreateLab` and through an ICC profile — so what went
 	 * is a name rather than a capability, and XYZ is reachable the same way through a profile. */
-	if ([name isEqual:kCGColorSpaceGenericGrayGamma2_2]) {
+	if (CFEqual(name, kCGColorSpaceGenericGrayGamma2_2)) {
 		*model = kCGColorSpaceModelMonochrome;
 		*components = 1;
 		wp = cg_xy(CG_D65_X, CG_D65_Y);
@@ -195,7 +192,7 @@ static cmsHPROFILE cg_profile_for_name(NSString *name, CGColorSpaceModel *model,
  * ------------------------------------------------------------------------------------- */
 #define CG_NAMED_MAX 8
 static struct {
-	NSString *name;              /* the CONSTANT, which is never released */
+	CFStringRef name;            /* the CONSTANT, which is never released */
 	CGColorSpaceRef space;       /* the cache's own reference */
 } cg_named[CG_NAMED_MAX];
 static int cg_named_count;
@@ -206,21 +203,21 @@ static int cg_named_count;
  * if the colour space has no name". A space built from a profile's bytes or from parameters was not
  * asked for by name either, and inventing one would invent a name nobody could pass back to
  * `CGColorSpaceCreateWithName`. */
-NSString *CGColorSpaceCopyName(CGColorSpaceRef space)
+CFStringRef CGColorSpaceCopyName(CGColorSpaceRef space)
 {
 	int i;
 
 	if (space == NULL) {
-		return nil;
+		return NULL;
 	}
 	for (i = 0; i < cg_named_count; i++) {
 		if (cg_named[i].space == space) {
 			/* `-copy` ON AN IMMUTABLE STRING IS THE SAME OBJECT RETAINED, which is what a
 			 * `Copy`-named function owes its caller: something they own. */
-			return [cg_named[i].name copy];
+			return (CFStringRef)CFRetain(cg_named[i].name);
 		}
 	}
-	return nil;
+	return NULL;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -233,25 +230,25 @@ static void fn_release_profile_data(void *info, const void *data, size_t size)
 {
 	(void)data;
 	(void)size;
-	[(NSData *)info release];
+	CFRelease((CFDataRef)info);
 }
 
 /* A DATA PROVIDER IS THE ROAD IN, BECAUSE IT ALREADY IS ONE: `CGColorSpaceCreateICCBased` takes a provider,
  * validates the bytes, parses them and keeps the PROFILE rather than the data — so this door is the CFData
  * form of that one and not a second parser. The zero component count means "ask the profile". */
-CGColorSpaceRef CGColorSpaceCreateWithICCProfile(NSData *data)
+CGColorSpaceRef CGColorSpaceCreateWithICCProfile(CFDataRef data)
 {
 	CGDataProviderRef provider;
 	CGColorSpaceRef space;
 
-	if (data == nil) {
+	if (data == NULL) {
 		fprintf(stderr, "CG-REFUSE: CGColorSpaceCreateWithICCProfile needs the profile's bytes\n");
 		return NULL;
 	}
-	provider = CGDataProviderCreateWithData((void *)[data retain], [data bytes], (size_t)[data length],
+	provider = CGDataProviderCreateWithData((void *)CFRetain(data), CFDataGetBytePtr(data), (size_t)CFDataGetLength(data),
 						fn_release_profile_data);
 	if (provider == NULL) {
-		[data release];
+		CFRelease(data);
 		return NULL;
 	}
 	space = CGColorSpaceCreateICCBased(0, NULL, provider, NULL);
@@ -262,34 +259,34 @@ CGColorSpaceRef CGColorSpaceCreateWithICCProfile(NSData *data)
 /* AND THE ROAD OUT IS THE ENGINE'S OWN SERIALISER, because re-emitting a profile by hand would be a second
  * implementation of a format that this library only ever reads. THE SIZE IS ASKED FOR FIRST, which is how the
  * engine's writer is called twice: once to measure, once to fill. */
-NSData *CGColorSpaceCopyICCProfile(CGColorSpaceRef space)
+CFDataRef CGColorSpaceCopyICCProfile(CGColorSpaceRef space)
 {
 	cmsHPROFILE profile = (cmsHPROFILE)cg_colorspace_profile_handle(space);
 	cmsUInt32Number size = 0;
 	void *mem;
-	NSData *data;
+	CFDataRef data;
 
 	if (profile == NULL) {
-		return nil;	/* Apple: "or NULL if the color space doesn't have an ICC profile" */
+		return NULL;	/* Apple: "or NULL if the color space doesn't have an ICC profile" */
 	}
 	if (!cmsSaveProfileToMem(profile, NULL, &size) || size == 0) {
-		return nil;
+		return NULL;
 	}
 	mem = malloc((size_t)size);
 	if (mem == NULL) {
-		return nil;
+		return NULL;
 	}
 	if (!cmsSaveProfileToMem(profile, mem, &size)) {
 		free(mem);
-		return nil;
+		return NULL;
 	}
 	/* THE CALLER OWNS WHAT COMES BACK, and the engine's buffer is this function's to free. */
-	data = [[NSData alloc] initWithBytes:mem length:(NSUInteger)size];
+	data = CFDataCreate(NULL, mem, (CFIndex)size);
 	free(mem);
 	return data;
 }
 
-CGColorSpaceRef CGColorSpaceCreateWithName(NSString *name)
+CGColorSpaceRef CGColorSpaceCreateWithName(CFStringRef name)
 {
 	CGColorSpaceModel model = kCGColorSpaceModelUnknown;
 	size_t components = 0;
@@ -304,7 +301,7 @@ CGColorSpaceRef CGColorSpaceCreateWithName(NSString *name)
 	/* ONE OBJECT PER NAME: a hit returns the cached space, RETAINED, so that the caller's release
 	 * is balanced exactly as it would be for a fresh one — the cache's own reference is separate. */
 	for (i = 0; i < cg_named_count; i++) {
-		if ([cg_named[i].name isEqual:name]) {
+		if (CFEqual(cg_named[i].name, name)) {
 			return CGColorSpaceRetain(cg_named[i].space);
 		}
 	}

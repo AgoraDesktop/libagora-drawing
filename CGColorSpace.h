@@ -191,20 +191,20 @@ typedef struct objc_object NSString;
 /* THE FOUR GENERIC SPACES: what a caller asks for when it wants "a gray space" or "an RGB space"
  * and does not care which. Apple's names, this tree's type for them, declared the way the three below
  * are — see the note above for why the type is `NSString *`. */
-extern NSString *const kCGColorSpaceGenericGray;
-extern NSString *const kCGColorSpaceGenericRGB;
-extern NSString *const kCGColorSpaceGenericCMYK;
-extern NSString *const kCGColorSpaceGenericRGBLinear;
+extern const CFStringRef kCGColorSpaceGenericGray;
+extern const CFStringRef kCGColorSpaceGenericRGB;
+extern const CFStringRef kCGColorSpaceGenericCMYK;
+extern const CFStringRef kCGColorSpaceGenericRGBLinear;
 
-extern NSString *const kCGColorSpaceSRGB;
-extern NSString *const kCGColorSpaceAdobeRGB1998;
-extern NSString *const kCGColorSpaceGenericGrayGamma2_2;
+extern const CFStringRef kCGColorSpaceSRGB;
+extern const CFStringRef kCGColorSpaceAdobeRGB1998;
+extern const CFStringRef kCGColorSpaceGenericGrayGamma2_2;
 
 /* A space by name, or NULL with a reason on stderr. THE DEVICE SPACES ARE SHARED SINGLETONS AND
  * THE NAMED SPACES ARE CACHED TOO — one object per name — because `CGColorSpaceCopyName` below
  * needs a space to know which name it was made with. SUPERSEDED: an earlier version of this
  * paragraph said the named spaces were NOT cached and called that a deviation. */
-CGColorSpaceRef CGColorSpaceCreateWithName(NSString *name);
+CGColorSpaceRef CGColorSpaceCreateWithName(CFStringRef name);
 
 /* THE NAME THIS SPACE WAS MADE WITH, OR NIL. It is a COPY — the caller owns it — and it closes the
  * loop with the function above: a name that comes out of this one can go straight back in, because
@@ -219,7 +219,7 @@ CGColorSpaceRef CGColorSpaceCreateWithName(NSString *name);
  * function returns +1, and an Objective-C caller under ARC would otherwise treat it as +0 and leak.
  * It EXPANDS AWAY under a C compiler, where it means nothing and clang would warn that it is
  * ignored — which is what CGBase.h's macro is for. */
-NSString *CGColorSpaceCopyName(CGColorSpaceRef space) CG_RETURNS_RETAINED;
+CFStringRef CGColorSpaceCopyName(CGColorSpaceRef space) CG_RETURNS_RETAINED;
 
 /* !! `CGColorSpaceCreateWithICCData` STOOD HERE AND WAS REMOVED (2026-10-05): it is macOS 10.12,
  * out of era. THE ICC ROOM KEEPS ITS IN-ERA DOORS — `CGColorSpaceCreateICCBased` and
@@ -236,8 +236,8 @@ NSString *CGColorSpaceCopyName(CGColorSpaceRef space) CG_RETURNS_RETAINED;
  *      `CGColorSpaceCreateWithICCProfile` takes a `CFDataRef` and `CGColorSpaceCopyICCProfile` returns one,
  *      both 10.5. What 10.12 added was the NSDATA SPELLING OF THEIR NAMES (`…WithICCData`/`…CopyICCData`), and
  *      that is what went. THE OWED ROWS WERE THESE TWO ALL ALONG. */
-CGColorSpaceRef CGColorSpaceCreateWithICCProfile(NSData *data);
-NSData *CGColorSpaceCopyICCProfile(CGColorSpaceRef space);
+CGColorSpaceRef CGColorSpaceCreateWithICCProfile(CFDataRef data);
+CFDataRef CGColorSpaceCopyICCProfile(CGColorSpaceRef space);
 
 /* THE CALIBRATED SPACES, AND THE ONE PLACE APPLE'S PARAMETERS DO NOT TRANSFER DIRECTLY. Apple
  * gives a MATRIX taking RGB to XYZ; the engine wants three PRIMARIES in xy. Those are the same

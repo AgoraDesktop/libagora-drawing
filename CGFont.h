@@ -43,6 +43,8 @@
 #ifndef CORE_GRAPHICS_CGFONT_H
 #define CORE_GRAPHICS_CGFONT_H
 
+#include <CoreFoundation/CoreFoundation.h>
+
 #include <CoreGraphics/CGBase.h>
 #include <CoreGraphics/CGGeometry.h>
 #include <CoreGraphics/CGDataProvider.h>
@@ -103,7 +105,7 @@ CGFontRef CGFontCreateWithPlatformFont(void *platformFontReference);
  * Apple's door takes a NAME, not a pattern, so a scan over the font directories answers it exactly —
  * at the cost of opening candidate files, which the one-face-per-style rule bounds. If pattern
  * matching is ever wanted, fontconfig can be layered behind this door rather than in place of it. */
-CGFontRef CGFontCreateWithFontName(NSString *name);
+CGFontRef CGFontCreateWithFontName(CFStringRef name);
 
 CGFontRef CGFontRetain(CGFontRef font);
 void CGFontRelease(CGFontRef font);
@@ -130,12 +132,12 @@ bool CGFontGetGlyphBBoxes(CGFontRef font, const CGGlyph glyphs[], size_t count, 
 
 /* BY NAME, IN BOTH DIRECTIONS. A font without glyph names answers `kCGFontIndexInvalid` and NULL
  * — that is a font fact, not a failure. */
-CGGlyph CGFontGetGlyphWithGlyphName(CGFontRef font, NSString *name);
-NSString *CGFontCopyGlyphNameForGlyph(CGFontRef font, CGGlyph glyph);
+CGGlyph CGFontGetGlyphWithGlyphName(CGFontRef font, CFStringRef name);
+CFStringRef CGFontCopyGlyphNameForGlyph(CGFontRef font, CGGlyph glyph);
 
 /* BOTH RETURN +1, which is what `Copy` means; NULL when the face carries no such name. */
-NSString *CGFontCopyPostScriptName(CGFontRef font);
-NSString *CGFontCopyFullName(CGFontRef font);
+CFStringRef CGFontCopyPostScriptName(CGFontRef font);
+CFStringRef CGFontCopyFullName(CGFontRef font);
 
 /* THE TYPE IDENTITY OF THIS CLASS: a `CFTypeID`, the same for every object of the class and
  * different from every other class's. The value is THIS LIBRARY'S (Apple's are runtime-assigned and
@@ -171,9 +173,9 @@ enum {
  * tree's binding for every CF type (see CGBase.h). They are THE KEYS OF THE AXES DICTIONARY a caller
  * passes to `CGFontCreateCopyWithVariations`, so their spelling is part of the interface: a caller
  * writes `kCGFontVariationAxisName` and expects the dictionary to be read by that name. */
-extern NSString *const kCGFontVariationAxisName;
-extern NSString *const kCGFontVariationAxisMinValue;
-extern NSString *const kCGFontVariationAxisMaxValue;
-extern NSString *const kCGFontVariationAxisDefaultValue;
+extern const CFStringRef kCGFontVariationAxisName;
+extern const CFStringRef kCGFontVariationAxisMinValue;
+extern const CFStringRef kCGFontVariationAxisMaxValue;
+extern const CFStringRef kCGFontVariationAxisDefaultValue;
 
 #endif /* CORE_GRAPHICS_CGFONT_H */
