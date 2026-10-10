@@ -37,14 +37,17 @@
  * WITH A PATTERN as well as from components, so there are TWO places a colour is allocated — the first
  * version of this conversion assumed one, and its guard refused to write anything until both were handled.
  * The count is no longer a field: it is the runtime's. */
-#import <Foundation/Foundation.h>
+#include <CoreFoundation/CoreFoundation.h>
 
-@interface CGColor : NSObject {
-	/* **`@public` BECAUSE THE DOORS ARE C FUNCTIONS**: every accessor in this file (`CGColorGetColorSpace`,
-	 * `CGColorGetComponents`, the create doors) is Apple's own C signature, and a C function cannot read a
-	 * protected ivar — the compile error this line fixes is "instance variable 'space' is protected", which is
-	 * exactly the shape the Core Text conversions met on `CTFont` and `CTFontDescriptor`. */
-	@public
+/* **THE COLOUR IS A CORE FOUNDATION TYPE**, not an Objective-C class: `CGColorRef` is a `CFTypeRef`,
+ * `CGColorGetTypeID()` is the identity Apple's header declares, and the storage is a `CFRuntimeBase`
+ * followed by the fields below. The Fiwix tree made this an `NSObject` subclass because its Core
+ * Graphics already linked Foundation; Agora's does not — Core Graphics depends on Core Foundation
+ * (PROVENANCE.md) — so the colour is registered with Core Foundation's runtime. That is also what
+ * makes a `CGColorRef` bridge to an `NSColor`.
+ */
+struct __CGColor {
+	CFRuntimeBase base;
 	CGColorSpaceRef space;                    /* RETAINED, so the colour owns it */
 	int ncomp;                                /* the SPACE's components, alpha NOT counted */
 	CGFloat comp[CG_COLOR_MAX_COMPONENTS];    /* the components, ALPHA LAST */
@@ -53,21 +56,53 @@
 	 * pattern's cell. The pointer is RETAINED here, which is what lets a caller release their own
 	 * reference the moment the colour is made. */
 	CGPatternRef pattern;
-}
-@end
+};
 
-@implementation CGColor
-
-/* THE SPACE AND THE PATTERN ARE RELEASED WITH THE COLOUR, which is exactly what the hand-rolled release
- * door did in its own freeing path — and `-dealloc` is the only place that happens now. */
-- (void)dealloc
+/* THE SPACE AND THE PATTERN ARE RELEASED WITH THE COLOUR — `finalize` is the only place that happens. */
+static void cg_color_finalize(CFTypeRef cf)
 {
-	CGPatternRelease(pattern);
-	CGColorSpaceRelease(space);
-	[super dealloc];
+	struct __CGColor *color = (struct __CGColor *)cf;
+
+	if (color->pattern != NULL) {
+		CGPatternRelease(color->pattern);
+	}
+	if (color->space != NULL) {
+		CGColorSpaceRelease(color->space);
+	}
 }
 
-@end
+static const CFRuntimeClass cg_color_class = {
+	0,                  /* version */
+	"CGColor",          /* className */
+	NULL,               /* init */
+	NULL,               /* copy */
+	cg_color_finalize,  /* finalize */
+	NULL,               /* equal */
+	NULL,               /* hash */
+	NULL,               /* copyFormattingDesc */
+	NULL,               /* copyDebugDesc */
+	NULL,               /* reclaim */
+	NULL,               /* refcount */
+	0                   /* requiredAlignment */
+};
+
+CFTypeID CGColorGetTypeID(void)
+{
+	static CFTypeID type_id = 0;
+
+	if (type_id == 0) {
+		type_id = _CFRuntimeRegisterClass(&cg_color_class);
+	}
+	return type_id;
+}
+
+/* THE ALLOCATION, IN ONE PLACE: `_CFRuntimeCreateInstance` gives the `CFRuntimeBase` a reference count
+ * of 1 and zeroes the extra bytes, so a create door only has to fill the fields. */
+static struct __CGColor *cg_color_alloc(void)
+{
+	return (struct __CGColor *)_CFRuntimeCreateInstance(kCFAllocatorDefault, CGColorGetTypeID(),
+			(CFIndex)(sizeof(struct __CGColor) - sizeof(CFRuntimeBase)), NULL);
+}
 
 /* THE ONE PLACE THAT DECIDES WHICH SPACES THIS LIBRARY CAN READ, so that `CGColorCreate` and
  * the context's colour setters cannot disagree about it. -1 means "not a space this tree can
@@ -110,8 +145,8 @@ CGColorRef CGColorCreate(CGColorSpaceRef space, const CGFloat components[])
 				"(grayscale, RGB or CMYK) and a non-NULL component array\n");
 		return NULL;
 	}
-	color = [[CGColor alloc] init];
-	if (color == nil) {
+	color = cg_color_alloc();
+	if (color == NULL) {
 		return NULL;
 	}
 	color->space = CGColorSpaceRetain(space);
@@ -227,8 +262,8 @@ CGColorRef CGColorCreateWithPattern(CGColorSpaceRef space, CGPatternRef pattern,
 				"array is refused rather than read as an opaque pattern\n");
 		return NULL;
 	}
-	color = [[CGColor alloc] init];
-	if (color == nil) {
+	color = cg_color_alloc();
+	if (color == NULL) {
 		return NULL;
 	}
 	color->space = CGColorSpaceRetain(space);
@@ -257,14 +292,14 @@ CGColorRef CGColorCreateCopyWithAlpha(CGColorRef color, CGFloat alpha)
 
 CGColorRef CGColorRetain(CGColorRef color)
 {
-	return (CGColorRef)[(id)(uintptr_t)color retain];
+	return (CGColorRef)CFRetain(color);
 }
 
 /* AND THE RELEASE IS WHERE THE SPACE AND THE PATTERN GO — through `-dealloc`, the one place that lifetime
  * ends now. */
 void CGColorRelease(CGColorRef color)
 {
-	[(id)(uintptr_t)color release];
+	CFRelease(color);
 }
 
 CGColorSpaceRef CGColorGetColorSpace(CGColorRef color)

@@ -40,7 +40,7 @@ static void fn_release_layer(void *info, const void *data, size_t size)
 	CGLayerRelease((CGLayerRef)info);
 }
 
-CGLayerRef CGLayerCreateWithContext(CGContextRef context, CGSize size, NSDictionary *auxiliaryInfo)
+CGLayerRef CGLayerCreateWithContext(CGContextRef context, CGSize size, CFDictionaryRef auxiliaryInfo)
 {
 	CGLayerRef layer;
 	CGColorSpaceRef space;

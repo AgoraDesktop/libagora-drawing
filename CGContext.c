@@ -726,7 +726,7 @@ static void cg_group_pop(CGContextRef c, int composite)
 	free(g);
 }
 
-static void cg_group_begin(CGContextRef c, NSDictionary *auxiliaryInfo)
+static void cg_group_begin(CGContextRef c, CFDictionaryRef auxiliaryInfo)
 {
 	struct cg_group *g;
 	size_t stride;
@@ -779,12 +779,12 @@ static void cg_group_begin(CGContextRef c, NSDictionary *auxiliaryInfo)
 	c->state.blend = kCGBlendModeNormal;
 }
 
-void CGContextBeginTransparencyLayer(CGContextRef c, NSDictionary *auxiliaryInfo)
+void CGContextBeginTransparencyLayer(CGContextRef c, CFDictionaryRef auxiliaryInfo)
 {
 	cg_group_begin(c, auxiliaryInfo);
 }
 
-void CGContextBeginTransparencyLayerWithRect(CGContextRef c, CGRect rect, NSDictionary *auxiliaryInfo)
+void CGContextBeginTransparencyLayerWithRect(CGContextRef c, CGRect rect, CFDictionaryRef auxiliaryInfo)
 {
 	/* "IDENTICAL EXCEPT THAT THE CONTENT WILL BE BOUNDED BY `rect`" — and the CLIP is what bounds both
 	 * halves, since the group's drawing and the final composite both respect it. `CGContextClipToRect` is

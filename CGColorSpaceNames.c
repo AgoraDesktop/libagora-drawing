@@ -294,7 +294,7 @@ CGColorSpaceRef CGColorSpaceCreateWithName(CFStringRef name)
 	cmsHPROFILE p;
 	int i;
 
-	if (name == nil) {
+	if (name == NULL) {
 		fprintf(stderr, "CG-REFUSE: CGColorSpaceCreateWithName needs a name\n");
 		return NULL;
 	}

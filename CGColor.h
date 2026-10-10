@@ -54,12 +54,10 @@
  * wrappers.
  *
  * THE TWO ARMS ARE `CGBase.h`'s OWN IDIOM, which is what the Core Text types use for the same reason. */
-#ifdef __OBJC__
-@class CGColor;
-#else
-typedef struct objc_object CGColor;
-#endif
-typedef CGColor *CGColorRef;
+/* **A CORE FOUNDATION TYPE**: `CGColorRef` is a `CFTypeRef` whose class is registered with Core
+ * Foundation's runtime, exactly as Apple's is — the opaque `struct __CGColor` is defined in CGColor.c.
+ * See CGColor.c and PROVENANCE.md. */
+typedef struct __CGColor *CGColorRef;
 
 /* `components` are in `space`, ALPHA LAST, and there must be one more of them than the space's
  * model needs (1 + alpha for grayscale, 3 + alpha for RGB). A NULL space, a NULL array or a
