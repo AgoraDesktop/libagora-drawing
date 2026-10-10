@@ -77,60 +77,25 @@
  * is the Foundation counterpart of Apple's `CFArrayRef`, and what may live INSIDE it is that
  * function's business, not this header's.
  */
-#ifdef __OBJC__
-@class NSArray;
-@class NSSet;
-@class NSNumber;
-@class NSAttributedString;
-@class NSCharacterSet;
-@class NSData;
-@class NSDictionary;
-@class NSMutableData;
-@class NSString;
-@class NSURL;
-/* **AND `NSError`, ADDED BY CT-M7h FOR THE SAME REASON AS THE REST**: the font manager's registering doors take
- * an `NSError **` out-parameter (the era's `CFErrorRef *`), and a C header that names a type includes or
- * forward-declares it. Nothing about an error needs Foundation to be DECLARED. */
-@class NSError;
-#else
-typedef struct objc_object NSArray;
-typedef struct objc_object NSSet;
-typedef struct objc_object NSNumber;
-typedef struct objc_object NSAttributedString;
-typedef struct objc_object NSCharacterSet;
-typedef struct objc_object NSData;
-typedef struct objc_object NSDictionary;
-typedef struct objc_object NSMutableData;
-typedef struct objc_object NSString;
-typedef struct objc_object NSURL;
-typedef struct objc_object NSError;
+/* THE CORE FOUNDATION OBJECT TYPES THE SIGNATURES NAME. Agora's Core Graphics depends on Core Foundation
+ * (PROVENANCE.md): where the Fiwix tree spelled every CF type as the Foundation class it is toll-free with,
+ * this tier uses the CF types themselves — `CFStringRef`, `CFDataRef`, `CFArrayRef`, `CFDictionaryRef`,
+ * `CFURLRef`, `CFErrorRef` — so Core Graphics depends on `libagora-core` and NOT on Foundation. (Toll-free
+ * bridging makes the two the same object at run time; the SPELLING is what changes.)
+ */
+#include <CoreFoundation/CoreFoundation.h>
 
-/* **AND THE RANGE, WHICH IS A VALUE RATHER THAN AN OBJECT, SO ITS FIELDS HAVE TO BE SPELLED OUT**
- * (`dec-5245eae215922f08`, the user's decision, and the first C-visible range in this tree). A C caller
- * cannot use an incomplete type BY VALUE, which is why the definition is here and not a forward
- * declaration. THE TAG IS APPLE'S OWN (`struct _NSRange`), and Foundation's `NSObjCRuntime.h` now uses the
- * same tag, so the two declarations denote one type rather than two that merely look alike.
- *
- * **ITS ONE HAZARD IS NAMED RATHER THAN HIDDEN**: a C translation unit that included BOTH Foundation's
- * runtime header and this one would see the tag defined twice, which C diagnoses as a redefinition. That
- * is not reachable in this tree — no `.c` file includes Foundation at all, because the object types above
- * are the whole of what a C consumer needs — and the tag makes it a diagnosable mistake rather than a
- * silent ABI mismatch if it ever becomes reachable. `NSUInteger` comes with it because the fields are
- * spelled with it in Foundation and a caller may name the type; a repetition of the same typedef is legal
- * in C11, which is what makes declaring it in both places safe.
- *
- * **AND `NSInteger` BESIDE IT, ADDED BY CT-M7a FOR THE SAME REASON**: `CTFontManagerCompareFontFamilyNames`
- * is Apple's `CFComparatorFunction`, whose result is a `CFComparisonResult` — the Foundation counterpart of
- * which is `NSInteger`, and a C caller of that door has no Foundation header to get the name from. It is
- * `signed long` here because Foundation declares it so (`NSObjCRuntime.h`), and the repetition is the same
- * legal one `NSUInteger` above already relies on. */
+/* **AND THE RANGE, WHICH IS A VALUE RATHER THAN AN OBJECT, SO ITS FIELDS HAVE TO BE SPELLED OUT** — a C caller
+ * cannot use an incomplete type BY VALUE, which is why the definition is here. THE TAG IS APPLE'S OWN
+ * (`struct _NSRange`), so this and Foundation's `NSObjCRuntime.h` denote one type rather than two that merely
+ * look alike. `NSInteger` is `signed long` because Foundation declares it so; repeating a typedef is legal in
+ * C11, which is what makes declaring it here safe. */
 typedef unsigned long NSUInteger;
 typedef signed long NSInteger;
 typedef struct _NSRange {
 	unsigned long location;
 	unsigned long length;
 } NSRange;
-#endif
 
 /*
  * AND THE `ns_returns_retained` ATTRIBUTE, WHICH IS THE OTHER THING A C COMPILER CANNOT USE. A
@@ -170,21 +135,16 @@ typedef double CGFloat;
  * TWO. WHAT CANNOT BE COPIED IS THE VALUE: Apple's ids are assigned by its runtime at load and published
  * nowhere, so ours are this library's own — stable across runs, unique per class — and IDENTITY IS THE WHOLE
  * OF WHAT THE CONTRACT PROMISES. See CGTypeID_internal.h for the registry and CGTypeID.c for the doors. */
-typedef unsigned long CGTypeID;
-typedef CGTypeID CFTypeID;
+/* **`CFTypeID` IS CORE FOUNDATION'S**, from `<CoreFoundation/CFBase.h>` — Agora's Core Graphics depends on
+ * Core Foundation (PROVENANCE.md), so the identity type is CF's rather than this library's invention.
+ * `CGTypeID` stays as this library's local spelling: the IDENTITY VALUES are still its own (Apple publishes
+ * none, and only Core Foundation types get CF's runtime ids), and IDENTITY IS THE WHOLE OF WHAT THE CONTRACT
+ * PROMISES. See CGTypeID_internal.h for the registry and CGTypeID.c for the doors. */
+typedef CFTypeID CGTypeID;
 
-/* **`CFTypeRef`, BY THE SAME RULE AS `CFTypeID` ABOVE**: Apple's type for "any Core Foundation object", and
- * the acceptance this duplication is held to is that source written against Apple's headers compiles
- * unmodified — `CFTypeRef v = CTFontDescriptorCopyAttribute(d, k);` is ordinary Apple source. In this tier
- * every such object is an Objective-C object, so the two arms spell the same pointer: a class forward to an
- * ObjC compiler, the opaque `struct objc_object` to a C one. THE VALUES ARE THIS TIER'S OWN, exactly as
- * `CFTypeID`'s are, and the contract is the same one — the type is the promise, not the provenance. */
-#ifdef __OBJC__
-@class NSObject;
-typedef NSObject *CFTypeRef;
-#else
-typedef struct objc_object *CFTypeRef;
-#endif
+/* **`CFTypeRef` IS CORE FOUNDATION'S TOO**, from `<CoreFoundation/CFBase.h>` — "any Core Foundation object",
+ * exactly as Apple's headers have it: `CFTypeRef v = CTFontDescriptorCopyAttribute(d, k);` is ordinary Apple
+ * source. */
 
 /* ------------------------------------------------------------------------- */
 /* The macros: the float type, and the three annotations                       */

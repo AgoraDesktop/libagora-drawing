@@ -24,6 +24,8 @@
 #ifndef CORE_GRAPHICS_CGGEOMETRY_H
 #define CORE_GRAPHICS_CGGEOMETRY_H
 
+#include <CoreFoundation/CFDictionary.h>
+
 #include <CoreGraphics/CGBase.h>
 
 #ifdef __cplusplus
@@ -115,15 +117,15 @@ CGRect CGRectMake(CGFloat x, CGFloat y, CGFloat width, CGFloat height);
  * probing a dictionary should not have to read a diagnostic to find out. THE OUTPUT STRUCT IS LEFT UNTOUCHED
  * when the answer is false, which is what "store the value in `point'" can mean on a path that returns false.
  *
- * THE TYPE IS `NSDictionary *` for Apple's `CFDictionaryRef`, as every CF type in this library is spelled, and
+ * THE TYPE IS `CFDictionaryRef` — Apple's own — because Agora's Core Graphics depends on Core Foundation, and
  * THE `Create` DOORS RETURN A REFERENCE THE CALLER OWNS — release it, as Apple's own documentation says to
  * release the CFDictionary it returns. */
-NSDictionary *CGPointCreateDictionaryRepresentation(CGPoint point);
-bool CGPointMakeWithDictionaryRepresentation(NSDictionary *dict, CGPoint *point);
-NSDictionary *CGSizeCreateDictionaryRepresentation(CGSize size);
-bool CGSizeMakeWithDictionaryRepresentation(NSDictionary *dict, CGSize *size);
-NSDictionary *CGRectCreateDictionaryRepresentation(CGRect rect);
-bool CGRectMakeWithDictionaryRepresentation(NSDictionary *dict, CGRect *rect);
+CFDictionaryRef CGPointCreateDictionaryRepresentation(CGPoint point);
+bool CGPointMakeWithDictionaryRepresentation(CFDictionaryRef dict, CGPoint *point);
+CFDictionaryRef CGSizeCreateDictionaryRepresentation(CGSize size);
+bool CGSizeMakeWithDictionaryRepresentation(CFDictionaryRef dict, CGSize *size);
+CFDictionaryRef CGRectCreateDictionaryRepresentation(CGRect rect);
+bool CGRectMakeWithDictionaryRepresentation(CFDictionaryRef dict, CGRect *rect);
 
 /* Reading a rectangle. */
 CGFloat CGRectGetMinX(CGRect rect);
