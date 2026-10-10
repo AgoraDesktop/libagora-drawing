@@ -24,6 +24,9 @@
 #ifndef CORE_GRAPHICS_CGDATAPROVIDER_H
 #define CORE_GRAPHICS_CGDATAPROVIDER_H
 
+#include <CoreFoundation/CFData.h>
+#include <CoreFoundation/CFURL.h>
+
 #include <CoreGraphics/CGBase.h>
 /* `off_t` IS NAMED BY THE CALLBACK FAMILY BELOW — Apple's own header takes it from CoreFoundation's
  * includes, and this library says where it comes from instead of inheriting a coincidence. */
@@ -63,14 +66,14 @@ void CGDataProviderRelease(CGDataProviderRef provider);
  * the provider is released, so the object's lifetime is the provider's; that is Apple's contract
  * for this form and the reason the C half can keep treating "a buffer plus a callback" as the one
  * shape a provider has. */
-CGDataProviderRef CGDataProviderCreateWithCFData(NSData *data);
+CGDataProviderRef CGDataProviderCreateWithCFData(CFDataRef data);
 
 /* THE BYTES AS A FOUNDATION OBJECT — the read side of the same door, and A COPY: the caller owns
  * the result, so a provider may be released the moment its caller is done. Handing back a view of
  * the provider's memory would tie the two lifetimes together for no reason a caller asked for.
  * `CG_RETURNS_RETAINED` SAYS THAT OWNERSHIP OUT LOUD, which is what an ARC caller needs to hear:
  * without it, ARC would take the +1 return for +0 and leak the copy. */
-NSData *CGDataProviderCopyData(CGDataProviderRef provider) CG_RETURNS_RETAINED;
+CFDataRef CGDataProviderCopyData(CGDataProviderRef provider) CG_RETURNS_RETAINED;
 
 #ifdef __cplusplus
 }
@@ -134,6 +137,6 @@ CGDataProviderRef CGDataProviderCreateDirect(void *info, off_t size,
  * filename form's — the same code that already reads a font or a profile — so this door is a URL-to-path
  * step and a refusal, not a second file reader. Declared here and implemented with the Foundation object it
  * takes, like the CF-typed form above. */
-CGDataProviderRef CGDataProviderCreateWithURL(NSURL *url);
+CGDataProviderRef CGDataProviderCreateWithURL(CFURLRef url);
 
 #endif /* CORE_GRAPHICS_CGDATAPROVIDER_H */

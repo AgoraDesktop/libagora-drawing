@@ -5,24 +5,24 @@
  * SPDX-License-Identifier: MIT
  *
  * THESE ARE NAMES AND NOT COLOURS: in the 10.6 surface (which is the surface this library targets) they are
- * `CFStringRef` constants, spelled here as `NSString *` like every other CF type, and a caller hands one to
- * `CGColorGetConstantColor` to get the colour back. Apple's own heading says so: "Names of colors for use
- * with `CGColorGetConstantColor'".
+ * `CFStringRef` constants — Agora's Core Graphics depends on Core Foundation, so they are the CF type and not
+ * a Foundation spelling of it (PROVENANCE.md). A caller hands one to `CGColorGetConstantColor` to get the
+ * colour back. Apple's own heading says so: "Names of colors for use with `CGColorGetConstantColor'".
  *
  * THE VALUE IS THIS LIBRARY'S OWN, AND APPLE PUBLISHES NONE — the constant's *contents* are not part of any
  * published contract, only the fact that these three names are recognised. So each one's value is its own
  * name, which is the property that makes it useless to guess at: the door below recognises exactly what the
  * header declares, and nothing else gets a colour.
  */
-#import <Foundation/Foundation.h>
+#include <CoreFoundation/CoreFoundation.h>
 
 #include <CoreGraphics/CGColor.h>
 
 #include <stdio.h>
 
-NSString *const kCGColorWhite = @"kCGColorWhite";
-NSString *const kCGColorBlack = @"kCGColorBlack";
-NSString *const kCGColorClear = @"kCGColorClear";
+const CFStringRef kCGColorWhite = CFSTR("kCGColorWhite");
+const CFStringRef kCGColorBlack = CFSTR("kCGColorBlack");
+const CFStringRef kCGColorClear = CFSTR("kCGColorClear");
 
 /* ------------------------------------------------------------------------- */
 /* The door the names are for                                                  */
@@ -47,18 +47,18 @@ static CGColorRef fn_cached(int slot, CGFloat gray, CGFloat alpha)
 	return fn_constant[slot];
 }
 
-CGColorRef CGColorGetConstantColor(NSString *name)
+CGColorRef CGColorGetConstantColor(CFStringRef name)
 {
-	if (name == nil) {
+	if (name == NULL) {
 		return NULL;
 	}
-	if ([name isEqual:kCGColorWhite]) {
+	if (CFEqual(name, kCGColorWhite)) {
 		return fn_cached(0, 1.0, 1.0);
 	}
-	if ([name isEqual:kCGColorBlack]) {
+	if (CFEqual(name, kCGColorBlack)) {
 		return fn_cached(1, 0.0, 1.0);
 	}
-	if ([name isEqual:kCGColorClear]) {
+	if (CFEqual(name, kCGColorClear)) {
 		return fn_cached(2, 0.0, 0.0);
 	}
 	fprintf(stderr, "CG-REFUSE: CGColorGetConstantColor knows kCGColorWhite, kCGColorBlack and "

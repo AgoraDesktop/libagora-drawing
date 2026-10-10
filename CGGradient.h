@@ -33,6 +33,8 @@
 #define CORE_GRAPHICS_CGGRADIENT_H
 
 #include <CoreGraphics/CGBase.h>
+#include <CoreFoundation/CFArray.h>
+
 #include <CoreGraphics/CGColor.h>
 #include <CoreGraphics/CGColorSpace.h>
 #include <CoreGraphics/CGGeometry.h>
@@ -99,7 +101,7 @@ CGGradientRef CGGradientCreateWithColorComponents(CGColorSpaceRef space, const C
  * An element that is not an `NSValue` is REFUSED, and so is a NULL element — one NULL in the array
  * would otherwise become a stop of some invented colour.
  */
-CGGradientRef CGGradientCreateWithColors(CGColorSpaceRef space, NSArray *colors,
+CGGradientRef CGGradientCreateWithColors(CGColorSpaceRef space, CFArrayRef colors,
 					 const CGFloat *locations);
 
 /* Lifetime. A gradient is a counted object like the rest of this library's, and the draw verbs

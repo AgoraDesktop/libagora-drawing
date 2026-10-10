@@ -38,6 +38,8 @@
 #ifndef CORE_GRAPHICS_CGCOLOR_H
 #define CORE_GRAPHICS_CGCOLOR_H
 
+#include <CoreFoundation/CFString.h>
+
 #include <CoreGraphics/CGBase.h>
 #include <CoreGraphics/CGColorSpace.h>
 /* AND CGPattern.h, BECAUSE TWO OF THIS HEADER'S DECLARATIONS NAME A PATTERN — `CGColorCreateWithPattern`
@@ -191,10 +193,10 @@ CGTypeID CGColorGetTypeID(void);
  * and the space a caller would compare against — `CGColorSpaceCreateWithName` with the generic name — is
  * refused here, so there is nothing to compare with.
  */
-CGColorRef CGColorGetConstantColor(NSString *name);
+CGColorRef CGColorGetConstantColor(CFStringRef name);
 
-extern NSString *const kCGColorWhite;
-extern NSString *const kCGColorBlack;
-extern NSString *const kCGColorClear;
+extern const CFStringRef kCGColorWhite;
+extern const CFStringRef kCGColorBlack;
+extern const CFStringRef kCGColorClear;
 
 #endif /* CORE_GRAPHICS_CGCOLOR_H */
