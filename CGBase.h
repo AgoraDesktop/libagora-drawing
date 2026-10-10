@@ -85,17 +85,12 @@
  */
 #include <CoreFoundation/CoreFoundation.h>
 
-/* **AND THE RANGE, WHICH IS A VALUE RATHER THAN AN OBJECT, SO ITS FIELDS HAVE TO BE SPELLED OUT** — a C caller
- * cannot use an incomplete type BY VALUE, which is why the definition is here. THE TAG IS APPLE'S OWN
- * (`struct _NSRange`), so this and Foundation's `NSObjCRuntime.h` denote one type rather than two that merely
- * look alike. `NSInteger` is `signed long` because Foundation declares it so; repeating a typedef is legal in
- * C11, which is what makes declaring it here safe. */
-typedef unsigned long NSUInteger;
-typedef signed long NSInteger;
-typedef struct _NSRange {
-	unsigned long location;
-	unsigned long length;
-} NSRange;
+/* THE FOUNDATION VALUE TYPES THAT WERE SPELLED HERE — `NSRange`, `NSInteger`, `NSUInteger` — ARE GONE.
+ * They name FOUNDATION types, and Agora's Core Graphics depends on Core Foundation and not on Foundation
+ * (PROVENANCE.md). The Fiwix tree declared them for Core Text's doors; Foundation declares them, and a CG
+ * header that also declared them would redefine `struct _NSRange` in any translation unit that includes
+ * both — which is exactly what happened the first time Foundation included a CG header.
+ */
 
 /*
  * AND THE `ns_returns_retained` ATTRIBUTE, WHICH IS THE OTHER THING A C COMPILER CANNOT USE. A
