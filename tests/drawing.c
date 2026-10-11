@@ -1319,6 +1319,131 @@ static int case_clip_to_mask(void)
 	return g_fail - before;
 }
 
+/* WHERE A DRAWN IMAGE LANDS, AND WHY BOTH OF THIS SUITE'S EARLIER MISTAKES WERE ABOUT IT. Two probes
+ * before this one drew an image into a rect and then argued with the result; neither had measured the rule.
+ * The rule, MEASURED with an asymmetric source -- an 8x8 whose FIRST ROW IS WHITE and whose other seven are
+ * black, built from its own bytes so nothing is between the data and the answer:
+ *
+ *   rect (0,0,16,16), 2x      memory rows 0 and 1 white, the rest black
+ *   rect (0,0,12,12), 1.5x    memory row 4 white alone, rows 0..3 not painted at all
+ *
+ * TWO THINGS FOLLOW, AND THEY ARE DIFFERENT THINGS. FIRST: the image's row 0 lands at the rect's TOP, which
+ * in a context is its HIGHEST y -- so an image drawn into the bottom-left of a buffer has its first row at
+ * the BOTTOM of memory. SECOND: the rect itself is in user space, so a 12-tall rect at y=0 covers that
+ * buffer's memory rows 4 through 15 and leaves 0..3 alone. A case that knows only the first rule reads the
+ * second one as an off-by-four bug; a case that knows only the second reads the first as one.
+ *
+ * AND THE 1.5x ANSWER SHOWS THE SAMPLING: exactly ONE row is white, not one and a half, because the image
+ * was made with shouldInterpolate false and the scaling is nearest-neighbour. */
+/* Draw an image into a rect over a cleared buffer and count how many rows of the MIDDLE COLUMN came out
+ * white, reporting the first. The middle column is x=4 below, which is inside every rect these cases use:
+ * an earlier probe sampled x=8 against an eight-wide rect and read a column the draw never touched. */
+static size_t draw_and_count_white_rows(unsigned char *buf, size_t side, CGImageRef img, CGRect rect,
+					size_t *first_row)
+{
+	CGContextRef ctx;
+	size_t i, count = 0;
+
+	*first_row = side;
+	memset(buf, 0, side * side * 4);
+	ctx = CGBitmapContextCreate(buf, side, side, 8, side * 4, CGColorSpaceCreateDeviceRGB(),
+				    kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+	if (ctx == NULL) {
+		return 0;
+	}
+	CGContextDrawImage(ctx, rect, img);
+	for (i = 0; i < side; i++) {
+		if (buf[(i * side + 4) * 4 + 1] > 200) {
+			if (*first_row == side) {
+				*first_row = i;
+			}
+			count++;
+		}
+	}
+	return count;
+}
+
+static int case_image_draw_placement(void)
+{
+	int before = g_fail;
+	const size_t dst_side = 16, src_side = 8, dst_bpr = dst_side * 4;
+	static unsigned char srcbytes[8 * 8 * 4];	/* row 0 white, the rest black, B G R A */
+	unsigned char *buf = (unsigned char *)calloc(dst_side, dst_bpr);
+	CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+	CGDataProviderRef provider;
+	CGImageRef img;
+	size_t x, y, first, count;
+
+	check(buf != NULL && rgb != NULL, "the test could not set up");
+	if (buf == NULL || rgb == NULL) {
+		return g_fail - before;
+	}
+	for (y = 0; y < src_side; y++) {
+		for (x = 0; x < src_side; x++) {
+			unsigned char *p = srcbytes + (y * src_side + x) * 4;
+			unsigned char v = (y == 0) ? 255 : 0;
+
+			p[0] = v;
+			p[1] = v;
+			p[2] = v;
+			p[3] = 255;
+		}
+	}
+	provider = CGDataProviderCreateWithData(NULL, srcbytes, sizeof srcbytes, NULL);
+	check(provider != NULL, "the source's provider was refused");
+	if (provider == NULL) {
+		return g_fail - before;
+	}
+	img = CGImageCreate(src_side, src_side, 8, 32, src_side * 4, rgb,
+			    kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little, provider, NULL,
+			    false, kCGRenderingIntentDefault);
+	check(img != NULL, "the eight-by-eight source image could not be made");
+	if (img == NULL) {
+		return g_fail - before;
+	}
+
+	/* 2x, FILLING THE WHOLE BUFFER: the image's one white row becomes two, at the very top of memory. */
+	count = draw_and_count_white_rows(buf, dst_side, img, CGRectMake(0, 0, 16, 16), &first);
+	check(first == 0 && count == 2, "2x painted %zu white rows starting at memory row %zu, want 2 from 0",
+	      count, first);
+
+	/* 1.5x, INTO A 12-TALL RECT AT y=0: the rect covers memory rows 4..15 and leaves 0..3 alone, and the
+	 * image's row 0 sits at the rect's TOP, which is memory row 4. ONE row, not one and a half, because
+	 * the image was made with shouldInterpolate false. */
+	count = draw_and_count_white_rows(buf, dst_side, img, CGRectMake(0, 0, 12, 12), &first);
+	check(first == 4 && count == 1, "1.5x painted %zu white rows starting at memory row %zu, want 1 from 4",
+	      count, first);
+
+	/* 1:1 INTO THE BOTTOM-LEFT: eight rows tall, so the rect covers memory rows 8..15 and the white row is
+	 * at its top, which is memory row 8. */
+	count = draw_and_count_white_rows(buf, dst_side, img, CGRectMake(0, 0, 8, 8), &first);
+	check(first == 8 && count == 1, "a 1:1 draw painted %zu white rows starting at memory row %zu, want 1 "
+					"from 8", count, first);
+
+	/* AND NOTHING AT ALL OUTSIDE THE RECT, WHICH IS THE OTHER HALF OF THE RULE. */
+	memset(buf, 0, dst_side * dst_bpr);
+	{
+		CGContextRef ctx = CGBitmapContextCreate(buf, dst_side, dst_side, 8, dst_bpr, rgb,
+							 kCGImageAlphaPremultipliedFirst |
+								 kCGBitmapByteOrder32Little);
+		size_t i, above = 0;
+
+		check(ctx != NULL, "the context for the extent check was refused");
+		if (ctx == NULL) {
+			return g_fail - before;
+		}
+		CGContextDrawImage(ctx, CGRectMake(0, 0, 12, 12), img);
+		for (i = 0; i < 4 * dst_side; i++) {	/* memory rows 0..3 */
+			if ((buf[i * 4] | buf[i * 4 + 1] | buf[i * 4 + 2] | buf[i * 4 + 3]) != 0) {
+				above++;
+			}
+		}
+		check(above == 0, "%zu pixels were painted outside a 12-tall rect at y=0, which covers memory "
+				  "rows 4..15 of a 16-row buffer", above);
+	}
+	return g_fail - before;
+}
+
 static int run_in_child(const char *name, int (*fn)(void))
 {
 	pid_t pid;
@@ -1371,6 +1496,7 @@ static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "The colour component doors", case_colour_components },
 	{ "Cropping an image, and which rows the rect selects", case_image_crop },
 	{ "Clipping to a gray mask, and refusing one that is not", case_clip_to_mask },
+	{ "Where a drawn image lands, at three scales", case_image_draw_placement },
 };
 
 int main(void)
