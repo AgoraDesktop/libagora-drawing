@@ -18,9 +18,12 @@
  *     `CGFontCreateWithPlatformFont`, which needs a platform font reference this tree does not have and whose body
  *     raises and says so. The registry's own decision — where fonts live and how names map to them — was made where
  *     the code is rather than here, which is why this note drifted.
- *   - `CGFontGetTypeID` needs the CF type-identity question answered for the WHOLE library: this
- *     tree's CoreGraphics has no type registry, and inventing one in the font's header would
- *     make a font's answer the library's answer.
+ *   - ⚠ **`CGFontGetTypeID` IS NOT OWED EITHER, AND THIS NOTE WAS STALE IN THE SAME WAY (checked with the
+ *     rest of the table).** It said the door "needs the CF type-identity question answered for the WHOLE
+ *     library: this tree's CoreGraphics has no type registry". THE REGISTRY EXISTS -- it is `CGTypeID.c`,
+ *     whose comment says a door defined beside its class "would put the numbers in eleven places and make
+ *     them agree by review", which is exactly the arrangement this note was asking for -- and the door
+ *     answers 5, measured, defined in the library rather than declared and forgotten.
  *   - the tables, variations and PostScript-subset families (`CGFontCopyTableTags`,
  *     `CGFontCreateCopyWithVariations`, `CGFontCreatePostScriptSubset`, ...) are a printing and
  *     embedding surface, and the half of the system that would call them is the parked PDF one.

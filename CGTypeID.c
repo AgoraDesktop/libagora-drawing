@@ -9,9 +9,16 @@
  * answers the same id, and two classes never share one — are properties of the TABLE, not of any call site.
  * A door defined beside its class would put the numbers in eleven places and make them agree by review.
  *
- * WHICH DOORS ARE MISSING, AND WHY THAT IS NOT AN OVERSIGHT: `CGDataConsumerGetTypeID` and
- * `CGLayerGetTypeID` are owed because their CLASSES are — this library has no `CGDataConsumer` and no
- * `CGLayer` — and a type id for a type that does not exist would be a number with nothing to identify.
+ * AND NO DOOR IS MISSING FROM THE TABLE. THIS NOTE USED TO SAY THAT `CGDataConsumerGetTypeID` AND
+ * `CGLayerGetTypeID` WERE OWED "because their CLASSES are -- this library has no `CGDataConsumer` and no
+ * `CGLayer`", AND IT WAS STALE: both classes are here (`CGDataConsumer.c`, `CGLayer.c`), both doors are
+ * defined, and MEASURED they answer 12 and 13.
+ *
+ * THE WHOLE TABLE WAS MEASURED, NOT JUST THE TWO, AND IT KEEPS BOTH OF THE PROMISES THIS FILE MAKES: the
+ * same class answers the same id on a second call, and no two classes share one. The ids are 2..13 for the
+ * types this library mints, and `CGColor` answers 256 because it is a registered CORE FOUNDATION type
+ * rather than a CoreGraphics-minted one -- a difference in kind that the table makes visible rather than
+ * hiding behind a contiguous range.
  */
 #include <CoreGraphics/CGTypeID_internal.h>
 #include <CoreGraphics/CGDataConsumer.h>

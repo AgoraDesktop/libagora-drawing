@@ -17,9 +17,11 @@
  * Apple's contract, and it is the reason a provider is not just a struct with a pointer in it:
  * the lifetime is the interface. `CreateWithFilename` reads the file and owns the bytes itself.
  *
- * AND THE ACCESSOR IS INTERNAL. `CGDataProviderCopyData` hands back a CFDataRef in Apple's
- * signature and is absent here; the library's own consumers ask through
- * `CGDataProvider_internal.h`, which is not installed and not included by anything public.
+ * AND THE ACCESSOR IS PUBLIC. THIS PARAGRAPH USED TO SAY THE OPPOSITE -- that `CGDataProviderCopyData`
+ * "is absent here" and that the library's own consumers went through `CGDataProvider_internal.h` -- AND IT
+ * WAS STALE: the door is declared below in Apple's own signature, returns a +1 `CFDataRef`, and MEASURED
+ * WORKING (a provider made from a CFDataRef answers identical bytes through it). What is internal is the
+ * provider's STRUCTURE, not this accessor.
  */
 #ifndef CORE_GRAPHICS_CGDATAPROVIDER_H
 #define CORE_GRAPHICS_CGDATAPROVIDER_H
