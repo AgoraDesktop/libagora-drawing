@@ -22,7 +22,25 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 find_package(CoreFoundation CONFIG REQUIRED)
-find_package(lcms2 CONFIG REQUIRED)
+# ---------------------------------------------------------------------------
+# Dependency: little CMS, which is a sibling component built on its own.
+#
+# THE INSTALLED COPY IS LOOKED FOR FIRST AND THE SIBLING'S BUILD DIRECTORY IS THE FALLBACK, which is what
+# this tree needs in both directions: libagora-lcms2 HAS install rules (cmake/Lcms2Packaging.cmake) and
+# they put everything -- the library, its headers, lcms2-config.cmake, a pkgconfig file -- into the prefix,
+# so a consumer finds it normally; and a FRESH CHECKOUT has nothing installed yet, so without the fallback
+# this configure fails with "Could not find a package configuration file provided by lcms2" and every build
+# needs a -DCMAKE_PREFIX_PATH pointing into a sibling's build directory by hand.
+# ---------------------------------------------------------------------------
+set(AGORA_LCMS2_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../libagora-lcms2"
+    CACHE PATH "Source directory of the libagora-lcms2 component")
+
+find_package(lcms2 CONFIG QUIET)
+if(NOT lcms2_FOUND)
+  set(lcms2_DIR "${AGORA_LCMS2_DIR}/build" CACHE PATH
+      "Directory holding libagora-lcms2's lcms2-config.cmake")
+  find_package(lcms2 CONFIG REQUIRED)
+endif()
 find_package(PNG REQUIRED)
 find_package(JPEG REQUIRED)
 find_package(Freetype REQUIRED)

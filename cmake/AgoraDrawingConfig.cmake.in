@@ -22,6 +22,18 @@ include(CMakeFindDependencyMacro)
 
 find_dependency(CoreFoundation CONFIG)
 
+# AND IT HAS TO BE BUILT BY A COMPILER THAT ACCEPTS -fblocks. The target exports that flag on its interface,
+# because Core Foundation's headers are spelled with blocks -- and GCC DOES NOT ACCEPT THE FLAG AT ALL, so a
+# client that lets CMake choose its compiler fails with "cc: error: unrecognized command-line option
+# '-fblocks'" and no idea which of its dependencies asked for it. THIS PACKAGE SAYS SO ITSELF RATHER THAN
+# LEAVING THE LINKER TO EXPLAIN IT: this tree builds with clang, and the message names the flag to set.
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+  message(FATAL_ERROR
+    "libagora-drawing's interface requires a compiler that accepts -fblocks, because Core Foundation's "
+    "headers are spelled with blocks, and GCC does not accept that flag. Configure with "
+    "-DCMAKE_C_COMPILER=/usr/bin/clang-19.")
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/AgoraDrawingTargets.cmake")
 
 check_required_components(AgoraDrawing)
