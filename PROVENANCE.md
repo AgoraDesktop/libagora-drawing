@@ -40,4 +40,23 @@ CF types, so that Core Graphics depends on Core Foundation the way Apple's does:
 
 ## Agora changes
 
-Not yet made — the import is verbatim. This section records the conversion as it lands.
+**The conversion is made.** THIS SECTION USED TO SAY "not yet made — the import is verbatim", which was
+true of the import and has not been true since. The import was **21 `.c`, 10 `.m` and 31 `.h`**; this
+repository is **29 `.c`, 30 `.h` and no `.m` at all** — the ten Foundation translation units became C.
+
+| The plan's item | What this tree does now |
+|---|---|
+| `NSString *` → `CFStringRef`, `CFStringCreate*`/`CFStringGet*` for the message doors | the name constants and every string door; the variation-axis constants included |
+| `NSArray *` → `CFArrayRef` | `CGGradientCreateWithColors` takes a `CFArrayRef` **of `CGColorRef`**, and the elements ARE the colours — the import's `NSValue` pointer-wrappers are gone. The header still described them for a while after; `a1a8a73` corrected it |
+| `NSData *` → `CFDataRef` | `CGColorSpaceCreateWithICCProfile` / `CopyICCProfile`, `CGDataProviderCreateWithCFData`, `CGDataConsumerCreateWithCFData`; the URL and mutable-data forms are `CFURLRef` and `CFMutableDataRef` |
+| `CFTypeID` from `<CoreFoundation/CFBase.h>` | done. `CGTypeID` remains this library's spelling of the identity VALUES; `CFTypeID` is Core Foundation's type, which is the direction Apple's headers have |
+| the Foundation-flavoured translation units become CF-based, and C rather than Objective-C | they are C: `CGColorNames.c`, `CGColorSpaceNames.c`, `CGDataConsumerFoundation.c`, `CGDataProviderFoundation.c`, `CGFontNames.c`, `CGGeometryFoundation.c`, `CGGradientColors.c`. `NSCoderCGGeometry.{h,m}` and `NSValueCGGeometry.h` are gone |
+
+**How far the conversion went was measured rather than assumed.** An audit of every header and source for
+live Foundation residue — every `NS[A-Z]…` name, `NS_` macro, `@interface`, `@class`, `#import` and
+`objc_msgSend` — found exactly FOUR lines in the whole library: `@class NSString;` and its opaque-typedef
+twin in `CGColorSpace.h` and `CGFont.h`, with no signature naming one. They were dead, and they are gone
+(`a1a8a73`), along with eleven comment blocks that still described the Foundation binding — one of them
+claiming a `.m` file unwrapped `NSValues` that no longer existed.
+
+`README.md` records what is still not done.
