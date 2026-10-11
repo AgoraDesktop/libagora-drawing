@@ -38,6 +38,27 @@ CF types, so that Core Graphics depends on Core Foundation the way Apple's does:
   `CGGeometryFoundation.m`, `CGGradientColors.m`, `NSCoderCGGeometry.{h,m}`,
   `NSValueCGGeometry.h` — become CF-based, and can be C rather than Objective-C.
 
+## How a falsification is recorded here
+
+**FALSIFICATION OUTPUT IS CAPTURED TO A FILE AND QUOTED FROM THE FILE.** Twice in this library's short history
+the record of a falsification has described something other than what the run printed, and both times the
+fault was the same: writing the output from EXPECTATION rather than from the output itself.
+
+`0150d16` INVENTED A LINE THAT NEVER APPEARED. It reported
+`FAIL: CFGetTypeID(descriptor) is 256 and CTFontDescriptorGetTypeID() is 1` for a run whose whole transcript was
+`FAIL: … killed by signal 4`. The measured failure was the stronger one — SIGILL means Core Foundation halted
+inside `_CFRuntimeCreateInstance`, before the first assertion, so a type id the runtime does not own cannot be
+put on an object at all. Corrected in `87ba9f6`.
+
+`e6b31a0` OMITTED LINES THAT DID APPEAR, which is the same fault wearing different clothes. It quoted two FAIL
+lines from a run that printed four; the two dropped lines were the ones showing the falsification working
+properly, so the record described a weaker test than the one that ran. Corrected in the commit that adds this
+paragraph.
+
+Both corrections stay in the history rather than being squashed into the commits they fix, because a tree that
+hides how it keeps making a mistake cannot learn from it. The rule is three words long and has already been
+worth it: quote the file.
+
 ## Agora changes
 
 **The conversion is made.** THIS SECTION USED TO SAY "not yet made — the import is verbatim", which was
