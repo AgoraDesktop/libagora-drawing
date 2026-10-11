@@ -616,6 +616,167 @@ static int case_images_from_data(void)
 	return g_fail - before;
 }
 
+/* ------------------------------------------------------------------------ */
+/* the radial shading, and the degenerate cases the header PROMISES about   */
+/* ------------------------------------------------------------------------ */
+
+/* A RADIAL RAMP IS CHECKED NEAR ITS CENTRE AGAINST A CORNER, which is what makes the check independent of
+ * which way the rows run in memory: whatever the y flip, the pixel at (7,7) is near the centre and the
+ * pixel at offset 0 is a corner. MEASURED, with the callback that puts red at in[0]:
+ *
+ *   r0=0, r1=8 (a point out to a disc)   near-centre B=232 R=23   corner B=0 R=255
+ *   r0=8, r1=0 (the same circles swapped) near-centre B=23 R=232   corner B=255 R=0
+ *
+ * SO THE PARAMETER RUNS FROM THE START CIRCLE TO THE END CIRCLE, and the second half of this case is what
+ * says so: swapping the radii swaps the picture, which a case that only looked at one of them could not
+ * tell from a shading that ignored its arguments.
+ *
+ * BOTH ARE COINCIDENT-CENTRE SHADINGS -- the header's "the centres may coincide (concentric)" case -- and
+ * both carry a radius of zero, which is its other one. */
+static int case_radial_shading(void)
+{
+	int before = g_fail;
+	const size_t side = 16, bpr = side * 4;
+	unsigned char *buffer = (unsigned char *)calloc(side, bpr);
+	CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+	CGContextRef ctx;
+	const CGFloat domain[2] = { 0.0, 1.0 };
+	const CGFloat range[6] = { 0, 1, 0, 1, 0, 1 };
+	CGFunctionCallbacks callbacks = { 0, shading_evaluate, NULL };
+	CGFunctionRef function;
+	CGPoint c = { 8.0, 8.0 };
+	CGShadingRef out, in;
+	const unsigned char *near_centre = buffer + (7 * side + 7) * 4;
+	const unsigned char *corner = buffer;
+
+	check(buffer != NULL && rgb != NULL, "the test could not set up");
+	if (buffer == NULL || rgb == NULL) {
+		return g_fail - before;
+	}
+	ctx = CGBitmapContextCreate(buffer, side, side, 8, bpr, rgb,
+				    kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+	check(ctx != NULL, "the context for the radial shading was refused");
+	if (ctx == NULL) {
+		return g_fail - before;
+	}
+	function = CGFunctionCreate(NULL, 1, domain, 3, range, &callbacks);
+	check(function != NULL, "the radial shading's function was refused");
+	if (function == NULL) {
+		return g_fail - before;
+	}
+
+	out = CGShadingCreateRadial(rgb, c, 0.0, c, 8.0, function, true, true);
+	check(out != NULL, "a shading from a point out to a disc was refused");
+	if (out != NULL) {
+		CGContextDrawShading(ctx, out);
+		check(near_centre[0] > 150 && near_centre[2] < 100,
+		      "the centre of a 0-to-8 ramp is not the callback's in=0 end (B=%u R=%u)",
+		      near_centre[0], near_centre[2]);
+		check(corner[2] > 150 && corner[0] < 100,
+		      "the corner of a 0-to-8 ramp is not the callback's in=1 end (B=%u R=%u)",
+		      corner[0], corner[2]);
+		check(memcmp(near_centre, corner, 4) != 0, "the ramp painted one colour everywhere");
+	}
+
+	in = CGShadingCreateRadial(rgb, c, 8.0, c, 0.0, function, true, true);
+	check(in != NULL, "a shading with the two circles swapped was refused");
+	if (in != NULL) {
+		memset(buffer, 0, side * bpr);
+		CGContextDrawShading(ctx, in);
+		check(near_centre[2] > 150 && near_centre[0] < 100,
+		      "swapping the radii did not swap the ramp: the centre is still blue-dominant "
+		      "(B=%u R=%u)", near_centre[0], near_centre[2]);
+		check(corner[0] > 150 && corner[2] < 100,
+		      "swapping the radii did not swap the ramp: the corner is still red-dominant "
+		      "(B=%u R=%u)", corner[0], corner[2]);
+	}
+	return g_fail - before;
+}
+
+/* THE DEGENERATE CASES ARE PROMISED RATHER THAN DESCRIBED: "either may have a radius of zero (a point) and
+ * the centres may coincide (concentric) -- the degenerate cases are answered rather than refused". So they
+ * are CREATED here, which is the promise, and the fully degenerate one is also DRAWN, which is the part a
+ * refusal could not survive. MEASURED: a point-to-a-point shading is created and paints NOTHING -- that is
+ * recorded rather than asserted, because the header promises an answer and not a particular one.
+ *
+ * AND THE TWO REFUSALS THE DOOR DOES MAKE ARE CASES HERE, so that they are held by something other than the
+ * prose that states them: a function whose range dimension is not the space's component count, and a NULL
+ * function. The first is what this suite's own shading case tripped over before it was fixed. */
+static int case_radial_degenerate_and_refusals(void)
+{
+	int before = g_fail;
+	const size_t side = 16, bpr = side * 4;
+	unsigned char *buffer = (unsigned char *)calloc(side, bpr);
+	CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+	CGContextRef ctx;
+	const CGFloat domain[2] = { 0.0, 1.0 };
+	const CGFloat range3[6] = { 0, 1, 0, 1, 0, 1 };
+	const CGFloat range4[8] = { 0, 1, 0, 1, 0, 1, 0, 1 };
+	CGFunctionCallbacks callbacks = { 0, shading_evaluate, NULL };
+	CGFunctionRef three, four;
+	CGShadingRef point, loose;
+	CGPoint c = { 8.0, 8.0 };
+	size_t i, painted = 0;
+
+	check(buffer != NULL && rgb != NULL, "the test could not set up");
+	if (buffer == NULL || rgb == NULL) {
+		return g_fail - before;
+	}
+	ctx = CGBitmapContextCreate(buffer, side, side, 8, bpr, rgb,
+				    kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+	check(ctx != NULL, "the context was refused");
+	if (ctx == NULL) {
+		return g_fail - before;
+	}
+	three = CGFunctionCreate(NULL, 1, domain, 3, range3, &callbacks);
+	four = CGFunctionCreate(NULL, 1, domain, 4, range4, &callbacks);
+	check(three != NULL && four != NULL, "the test's functions were refused");
+
+	/* BOTH RADII ZERO, WHICH IS THE HEADER'S "A POINT" CASE AT BOTH ENDS AT ONCE. */
+	point = CGShadingCreateRadial(rgb, c, 0.0, c, 0.0, three, true, true);
+	check(point != NULL, "a shading from a point to a point was REFUSED; the header says the "
+			     "degenerate cases are answered");
+	if (point != NULL) {
+		CGContextDrawShading(ctx, point);
+		for (i = 0; i < side * side * 4; i++) {
+			if (buffer[i] != 0) {
+				painted++;
+			}
+		}
+		/* THIS IS A BEHAVIOUR PINNED RATHER THAN A PROMISE KEPT. The header promises that a degenerate
+		 * ramp is ANSWERED, not what colour it is, and MEASURED this one paints nothing at all -- so the
+		 * assertion is that it still paints nothing, and a change here is a finding to look at rather than
+		 * automatically a bug. An earlier version of this line read `check(painted == 0 || 1, ...)`, which
+		 * cannot fail and was therefore decoration; it is worth naming because that is the failure mode
+		 * this suite exists to avoid. */
+		check(painted == 0,
+		      "a point-to-point shading painted %zu bytes; measured, it paints nothing", painted);
+	}
+
+	/* TWO CIRCLES THAT DO NOT NEST, WHICH IS NEITHER DEGENERATE NOR REFUSED. */
+	loose = CGShadingCreateRadial(rgb, CGPointMake(4, 4), 4.0, CGPointMake(12, 12), 2.0, three, true,
+				      true);
+	check(loose != NULL, "a shading between two circles that do not nest was refused");
+	if (loose != NULL) {
+		memset(buffer, 0, side * bpr);
+		painted = 0;	/* AND THE COUNT IS RESET, or the check below passes on the FIRST shading's bytes */
+		CGContextDrawShading(ctx, loose);
+		for (i = 0; i < side * side * 4; i++) {
+			if (buffer[i] != 0) {
+				painted++;
+			}
+		}
+		check(painted > 0, "a shading between two non-nesting circles painted nothing at all");
+	}
+
+	/* AND THE TWO REFUSALS. */
+	check(CGShadingCreateRadial(rgb, c, 0.0, c, 8.0, four, true, true) == NULL,
+	      "a function producing 4 components was ACCEPTED for a 3-component space");
+	check(CGShadingCreateRadial(rgb, c, 0.0, c, 8.0, NULL, true, true) == NULL,
+	      "a shading with a NULL function was ACCEPTED");
+	return g_fail - before;
+}
+
 static int run_in_child(const char *name, int (*fn)(void))
 {
 	pid_t pid;
@@ -660,6 +821,8 @@ static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "A gradient painted into a context", case_gradient_into_context },
 	{ "An axial shading painted through a caller's function", case_axial_shading },
 	{ "Images decoded from PNG and JPEG files, then drawn", case_images_from_data },
+	{ "A radial shading, and that swapping its circles swaps the ramp", case_radial_shading },
+	{ "The radial degenerate cases, and the two refusals", case_radial_degenerate_and_refusals },
 };
 
 int main(void)
