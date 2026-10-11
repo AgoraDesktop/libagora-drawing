@@ -417,6 +417,205 @@ static int case_font_from_provider(void)
 	return g_fail - before;
 }
 
+/* ------------------------------------------------------------------------ */
+/* the pixel paths: a gradient and a shading painted into a context, and     */
+/* images decoded from real files                                            */
+/* ------------------------------------------------------------------------ */
+
+/* A GRADIENT DRAWN INTO A CONTEXT, WHICH IS THE FIRST THING HERE THAT PAINTS WITHOUT A RECT. The check is
+ * on the TWO ENDS AND ON THEIR DIFFERENCE: a gradient that painted one colour everywhere would satisfy an
+ * end-only check on one side, and "the ends differ" is what makes this a gradient rather than a fill. The
+ * pixel order is the implementation's documented B, G, R, A. */
+static int case_gradient_into_context(void)
+{
+	int before = g_fail;
+	const size_t width = 16, height = 1, bpr = width * 4;
+	unsigned char *buffer = (unsigned char *)calloc(height, bpr);
+	CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+	CGContextRef ctx;
+	CGColorRef red = CGColorCreateGenericRGB(1, 0, 0, 1);
+	CGColorRef blue = CGColorCreateGenericRGB(0, 0, 1, 1);
+	const void *values[2];
+	CFArrayRef ramp;
+	CGGradientRef gradient;
+	const unsigned char *last;
+
+	check(buffer != NULL && rgb != NULL && red != NULL && blue != NULL, "the test could not set up");
+	if (buffer == NULL || rgb == NULL || red == NULL || blue == NULL) {
+		return g_fail - before;
+	}
+	ctx = CGBitmapContextCreate(buffer, width, height, 8, bpr, rgb,
+				    kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+	check(ctx != NULL, "the context for the gradient was refused");
+	if (ctx == NULL) {
+		return g_fail - before;
+	}
+	values[0] = red;
+	values[1] = blue;
+	ramp = CFArrayCreate(NULL, values, 2, &kCFTypeArrayCallBacks);
+	gradient = CGGradientCreateWithColors(rgb, ramp, NULL);
+	check(gradient != NULL, "the gradient for the draw was refused");
+	if (gradient == NULL) {
+		return g_fail - before;
+	}
+	CGContextDrawLinearGradient(ctx, gradient, CGPointMake(0, 0), CGPointMake((CGFloat)width, 0), 0);
+
+	last = buffer + (width - 1) * 4;
+	check(buffer[2] > 150 && buffer[0] < 100,
+	      "the start of a red-to-blue gradient is not red-dominant (B=%u G=%u R=%u A=%u)",
+	      buffer[0], buffer[1], buffer[2], buffer[3]);
+	check(last[0] > 150 && last[2] < 100,
+	      "the end of a red-to-blue gradient is not blue-dominant (B=%u G=%u R=%u A=%u)",
+	      last[0], last[1], last[2], last[3]);
+	check(memcmp(buffer, last, 4) != 0, "both ends of the gradient are the same pixel");
+	return g_fail - before;
+}
+
+/* A SHADING, WHICH PAINTS THROUGH A CALLER'S FUNCTION RATHER THAN THROUGH STOPS: the function is asked
+ * for a colour at each parameter along the axis, and here it returns red ramping up as blue ramps down --
+ * the same picture as the gradient above, arriving by a different door, which is why the same two-end
+ * check applies.
+ *
+ * THE FUNCTION PRODUCES THE SPACE'S COMPONENTS AND NO MORE, WHICH IS THE CONTRACT AND WAS MEASURED THE HARD
+ * WAY. This case first asked for FOUR components -- RGBA -- against a THREE-component RGB space, and
+ * CGShadingCreateAxial refused it, saying so precisely:
+ *
+ *   CG-REFUSE: the shading's colour space has 3 components and the function produces 4
+ *
+ * An alpha is not the function's business: the context's alpha state supplies it. The library was right
+ * and the case was wrong, which is the second time in this suite that a failing case turned out to be a
+ * mis-specified test rather than a defect. */
+static void shading_evaluate(void *info, const CGFloat *in, CGFloat *out)
+{
+	(void)info;
+	out[0] = in[0];
+	out[1] = 0.0;
+	out[2] = 1.0 - in[0];
+}
+
+static int case_axial_shading(void)
+{
+	int before = g_fail;
+	const size_t width = 16, height = 1, bpr = width * 4;
+	unsigned char *buffer = (unsigned char *)calloc(height, bpr);
+	CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+	CGContextRef ctx;
+	const CGFloat domain[2] = { 0.0, 1.0 };
+	const CGFloat range[6] = { 0, 1, 0, 1, 0, 1 };	/* three components: the space's */
+	CGFunctionCallbacks callbacks = { 0, shading_evaluate, NULL };
+	CGFunctionRef function;
+	CGShadingRef shading;
+	const unsigned char *last;
+
+	check(buffer != NULL && rgb != NULL, "the test could not set up");
+	if (buffer == NULL || rgb == NULL) {
+		return g_fail - before;
+	}
+	ctx = CGBitmapContextCreate(buffer, width, height, 8, bpr, rgb,
+				    kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+	check(ctx != NULL, "the context for the shading was refused");
+	if (ctx == NULL) {
+		return g_fail - before;
+	}
+	function = CGFunctionCreate(NULL, 1, domain, 3, range, &callbacks);
+	check(function != NULL, "CGFunctionCreate refused a one-in four-out function");
+	if (function == NULL) {
+		return g_fail - before;
+	}
+	shading = CGShadingCreateAxial(rgb, CGPointMake(0, 0), CGPointMake((CGFloat)width, 0), function,
+				       true, true);
+	check(shading != NULL, "CGShadingCreateAxial refused an axial shading");
+	if (shading == NULL) {
+		return g_fail - before;
+	}
+	CGContextDrawShading(ctx, shading);
+
+	/* THE PARAMETER RUNS FROM 0 AT THE START TO 1 AT THE END, and the callback puts RED at in[0], so the
+	 * axis is BLUE AT ITS START AND RED AT ITS END -- measured, and the first version of this case
+	 * asserted the opposite because it was written from the name "red-to-blue" rather than from the
+	 * callback beside it. The library was right for the third time in this suite; the case was wrong. */
+	last = buffer + (width - 1) * 4;
+	check(buffer[0] > 150 && buffer[2] < 100,
+	      "the shading's START is not the callback's in=0 end, which is blue (B=%u R=%u)",
+	      buffer[0], buffer[2]);
+	check(last[2] > 150 && last[0] < 100,
+	      "the shading's END is not the callback's in=1 end, which is red (B=%u R=%u)",
+	      last[0], last[2]);
+	check(memcmp(buffer, last, 4) != 0, "both ends of the shading are the same pixel");
+	return g_fail - before;
+}
+
+/* IMAGES DECODED FROM REAL FILES AND THEN DRAWN, WHICH IS THE ONE PATH THAT READS A FILE FORMAT. The PNG
+ * and JPEG files are chosen because they were MEASURED to decode here rather than because they are the
+ * obvious ones: /usr/share/pixmaps/debian-logo.png is 48x48, python3's file.png is 16x16,
+ * sane-logo.jpg is 128x150 and sane-umax-advanced.jpg is 291x235, all answering 32 bits per pixel.
+ *
+ * WHAT IS ASSERTED IS THE DECODE AND THAT DRAWING IT CHANGES PIXELS -- NOT WHAT THE PICTURES CONTAIN,
+ * because the file is not this library's and its contents are not this suite's business. Drawing into a
+ * 64x64 rect SCALES the image to that rect, which is why the whole buffer is covered rather than 16x16 of
+ * it. A file that is not on the machine is REPORTED, per file, rather than quietly skipped. */
+static int case_images_from_data(void)
+{
+	int before = g_fail;
+	static const struct { const char *path; int is_png; } files[] = {
+		{ "/usr/share/pixmaps/debian-logo.png", 1 },
+		{ "/usr/share/doc/python3/_static/file.png", 1 },
+		{ "/usr/share/doc/libsane-common/umax/sane-logo.jpg", 0 },
+		{ "/usr/share/doc/libsane-common/umax/sane-umax-advanced.jpg", 0 },
+	};
+	size_t i;
+
+	for (i = 0; i < sizeof files / sizeof files[0]; i++) {
+		CGDataProviderRef provider;
+		CGImageRef image;
+		unsigned char *buffer;
+		CGContextRef ctx;
+		size_t j, nonzero = 0;
+
+		if (access(files[i].path, R_OK) != 0) {
+			printf("  (not run: %s is not on this machine)\n", files[i].path);
+			continue;
+		}
+		provider = CGDataProviderCreateWithFilename(files[i].path);
+		check(provider != NULL, "a provider could not be made from %s", files[i].path);
+		if (provider == NULL) {
+			continue;
+		}
+		image = files[i].is_png
+			? CGImageCreateWithPNGDataProvider(provider, NULL, true, kCGRenderingIntentDefault)
+			: CGImageCreateWithJPEGDataProvider(provider, NULL, true, kCGRenderingIntentDefault);
+		check(image != NULL, "%s could not be decoded", files[i].path);
+		if (image == NULL) {
+			continue;
+		}
+		check(CGImageGetWidth(image) > 0 && CGImageGetHeight(image) > 0,
+		      "%s decoded to a %zux%zu image", files[i].path, CGImageGetWidth(image),
+		      CGImageGetHeight(image));
+		check(CGImageGetBitsPerPixel(image) == 32, "%s decoded to %zu bits per pixel",
+		      files[i].path, CGImageGetBitsPerPixel(image));
+
+		buffer = (unsigned char *)calloc(64, 64 * 4);
+		check(buffer != NULL, "the test could not allocate the draw buffer");
+		if (buffer == NULL) {
+			continue;
+		}
+		ctx = CGBitmapContextCreate(buffer, 64, 64, 8, 64 * 4, CGColorSpaceCreateDeviceRGB(),
+					    kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+		check(ctx != NULL, "the context for drawing %s was refused", files[i].path);
+		if (ctx != NULL) {
+			CGContextDrawImage(ctx, CGRectMake(0, 0, 64, 64), image);
+			for (j = 0; j < 64 * 64 * 4; j++) {
+				if (buffer[j] != 0) {
+					nonzero++;
+				}
+			}
+			check(nonzero > 0, "drawing %s changed no pixels at all", files[i].path);
+		}
+		free(buffer);
+	}
+	return g_fail - before;
+}
+
 static int run_in_child(const char *name, int (*fn)(void))
 {
 	pid_t pid;
@@ -458,6 +657,9 @@ static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "A bitmap context whose fill reaches the pixels", case_bitmap_context_fill },
 	{ "A path: empty, contains, and its box", case_path },
 	{ "A font made from bytes", case_font_from_provider },
+	{ "A gradient painted into a context", case_gradient_into_context },
+	{ "An axial shading painted through a caller's function", case_axial_shading },
+	{ "Images decoded from PNG and JPEG files, then drawn", case_images_from_data },
 };
 
 int main(void)
