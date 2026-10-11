@@ -777,6 +777,146 @@ static int case_radial_degenerate_and_refusals(void)
 	return g_fail - before;
 }
 
+/* THE RADIAL GRADIENT AND THE RADIAL SHADING ARE THE SAME RAMP THROUGH TWO DOORS, AND THIS IS WHAT MAKES
+ * THAT A CLAIM RATHER THAN A COMMENT. CGShading.h says the degenerate answers come from "CGPaint.c's
+ * `cg_paint_radial_parameter`, shared with the radial gradient", so the two must agree about WHICH PIXELS
+ * the ramp covers -- their colour mappings are each their own, but the parameter and its extent are not.
+ *
+ * MEASURED WITH THE EXTENTS OFF, WHERE THE SHAPE IS A SHAPE AND NOT THE WHOLE BUFFER:
+ *
+ *   the two masks differ at 0 of 1024 pixels      (and 208 are painted -- a disc of radius 8, not 1024)
+ *   shading : centre B=232 R=23  mid-ring B=142 R=113  beyond the end radius B=0 R=0
+ *   gradient: centre B=232 R=23  mid-ring B=142 R=113
+ *
+ * THAT IS WHY THE COMPARISON IS PIXEL FOR PIXEL AND THE COUNT IS ASSERTED TO BE NEITHER ZERO NOR THE
+ * WHOLE BUFFER: a "0 of 1024 differ" result is worth nothing if both doors simply painted everything,
+ * which is what the first attempt at this measured with the extents left on.
+ *
+ * THE SAMPLED COLOURS AGREE TOO, EVERY PIXEL OF THEM, and that is asserted BELOW THE SHARING CLAIM RATHER
+ * THAN AS PART OF IT: a linear ramp through two stops and a linear function happen to interpolate alike,
+ * and a future difference in the gradient's interpolation rule would be a legitimate change that this line
+ * would report. The mask is the promise; the colours are today's measurement. */
+static int case_radial_gradient_matches_the_shading(void)
+{
+	int before = g_fail;
+	const size_t side = 32, bpr = side * 4;
+	unsigned char *via_shading_buf = (unsigned char *)calloc(side, bpr);
+	unsigned char *via_gradient_buf = (unsigned char *)calloc(side, bpr);
+	CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+	CGContextRef shading_ctx, gradient_ctx;
+	const CGFloat domain[2] = { 0.0, 1.0 };
+	const CGFloat range[6] = { 0, 1, 0, 1, 0, 1 };
+	CGFunctionCallbacks callbacks = { 0, shading_evaluate, NULL };
+	CGFunctionRef function;
+	CGColorRef blue = CGColorCreateGenericRGB(0, 0, 1, 1);
+	CGColorRef red = CGColorCreateGenericRGB(1, 0, 0, 1);
+	const void *values[2];
+	CFArrayRef stops;
+	CGGradientRef gradient;
+	CGPoint c = { 16.0, 16.0 };
+	size_t i, mask_differ = 0, colour_differ = 0, painted = 0;
+
+	check(via_shading_buf != NULL && via_gradient_buf != NULL && rgb != NULL && blue != NULL &&
+	      red != NULL, "the test could not set up");
+	if (via_shading_buf == NULL || via_gradient_buf == NULL || rgb == NULL || blue == NULL ||
+	    red == NULL) {
+		return g_fail - before;
+	}
+	shading_ctx = CGBitmapContextCreate(via_shading_buf, side, side, 8, bpr, rgb,
+					    kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+	gradient_ctx = CGBitmapContextCreate(via_gradient_buf, side, side, 8, bpr, rgb,
+					     kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+	check(shading_ctx != NULL && gradient_ctx != NULL, "a context was refused");
+	if (shading_ctx == NULL || gradient_ctx == NULL) {
+		return g_fail - before;
+	}
+	function = CGFunctionCreate(NULL, 1, domain, 3, range, &callbacks);
+	values[0] = blue;
+	values[1] = red;
+	stops = CFArrayCreate(NULL, values, 2, &kCFTypeArrayCallBacks);
+	gradient = CGGradientCreateWithColors(rgb, stops, NULL);
+	check(function != NULL && gradient != NULL, "the function or the gradient was refused");
+	if (function == NULL || gradient == NULL) {
+		return g_fail - before;
+	}
+
+	/* THE EXTENTS OFF: the ramp covers the disc where its parameter is defined, and nothing else. */
+	{
+		CGShadingRef shading = CGShadingCreateRadial(rgb, c, 0.0, c, 8.0, function, false, false);
+
+		check(shading != NULL, "the radial shading was refused");
+		if (shading != NULL) {
+			memset(via_shading_buf, 0, side * bpr);
+			CGContextDrawShading(shading_ctx, shading);
+		}
+	}
+	memset(via_gradient_buf, 0, side * bpr);
+	CGContextDrawRadialGradient(gradient_ctx, gradient, c, 0.0, c, 8.0, 0);
+
+	for (i = 0; i < side * side; i++) {
+		const unsigned char *a = via_shading_buf + i * 4;
+		const unsigned char *b = via_gradient_buf + i * 4;
+		int a_painted = (a[0] | a[1] | a[2] | a[3]) != 0;
+		int b_painted = (b[0] | b[1] | b[2] | b[3]) != 0;
+
+		if (a_painted != b_painted) {
+			mask_differ++;
+		} else if (memcmp(a, b, 4) != 0) {
+			colour_differ++;
+		}
+		if (b_painted) {
+			painted++;
+		}
+	}
+	check(mask_differ == 0,
+	      "the shading and the radial gradient disagree about %zu pixels: the parameter is supposed to "
+	      "be shared", mask_differ);
+	check(painted > 0 && painted < side * side,
+	      "the extents off painted %zu of %zu pixels; a ramp with extents off must cover neither "
+	      "nothing nor everything", painted, side * side);
+	check(colour_differ == 0,
+	      "%zu painted pixels differ in colour between the two doors; the masks agree", colour_differ);
+
+	/* AND WITH THE EXTENTS ON, BOTH COVER EVERYTHING -- which is what the two doors' separate spellings
+	 * (a pair of bools against a pair of option flags) have to amount to. */
+	memset(via_shading_buf, 0, side * bpr);
+	memset(via_gradient_buf, 0, side * bpr);
+	{
+		CGShadingRef extended = CGShadingCreateRadial(rgb, c, 0.0, c, 8.0, function, true, true);
+
+		check(extended != NULL, "the extended shading was refused");
+		if (extended != NULL) {
+			CGContextDrawShading(shading_ctx, extended);
+		}
+	}
+	CGContextDrawRadialGradient(gradient_ctx, gradient, c, 0.0, c, 8.0,
+				    kCGGradientDrawsBeforeStartLocation |
+					    kCGGradientDrawsAfterEndLocation);
+	{
+		size_t shading_painted = 0, gradient_painted = 0, extended_differ = 0;
+
+		for (i = 0; i < side * side; i++) {
+			const unsigned char *a = via_shading_buf + i * 4;
+			const unsigned char *b = via_gradient_buf + i * 4;
+
+			if ((a[0] | a[1] | a[2] | a[3]) != 0) {
+				shading_painted++;
+			}
+			if ((b[0] | b[1] | b[2] | b[3]) != 0) {
+				gradient_painted++;
+			}
+			if (memcmp(a, b, 4) != 0) {
+				extended_differ++;
+			}
+		}
+		check(shading_painted == side * side && gradient_painted == side * side,
+		      "with the extents on, the shading painted %zu and the gradient %zu of %zu pixels",
+		      shading_painted, gradient_painted, side * side);
+		check(extended_differ == 0, "%zu pixels differ when both extents are on", extended_differ);
+	}
+	return g_fail - before;
+}
+
 static int run_in_child(const char *name, int (*fn)(void))
 {
 	pid_t pid;
@@ -823,6 +963,7 @@ static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "Images decoded from PNG and JPEG files, then drawn", case_images_from_data },
 	{ "A radial shading, and that swapping its circles swaps the ramp", case_radial_shading },
 	{ "The radial degenerate cases, and the two refusals", case_radial_degenerate_and_refusals },
+	{ "The radial gradient and the radial shading are one ramp", case_radial_gradient_matches_the_shading },
 };
 
 int main(void)
