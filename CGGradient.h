@@ -79,27 +79,25 @@ CGGradientRef CGGradientCreateWithColorComponents(CGColorSpaceRef space, const C
 						  const CGFloat *locations, size_t count);
 
 /*
- * THE COLOURS FORM, AND THE ONE PLACE IN THIS HEADER WHERE APPLE'S SIGNATURE COULD NOT BE TAKEN
- * AS SPELLED. Apple's parameter is a `CFArrayRef` of `CGColorRef`; this tree has no Core
- * Foundation (the plan retracted it, §1), so the array is an `NSArray *` — the Foundation
- * counterpart, exactly as `CGDataProviderCreateWithCFData` takes an `NSData *` where Apple's name
- * says `CFData`.
+ * THE COLOURS FORM, UNDER APPLE'S SIGNATURE EXACTLY: a `CFArrayRef` OF `CGColorRef`.
  *
- * AND ITS ELEMENTS ARE `NSValue` POINTER-WRAPPERS, WHICH IS THE PART THAT NEEDS SAYING. A
- * `CGColorRef` is not an Objective-C object here (it is a counted struct), so it cannot simply live
- * in an `NSArray`: an array that retained its elements would send `-retain` to a C struct. So each
- * element is an `NSValue` built with `+[NSValue valueWithPointer:]` and read back with
- * `-pointerValue`:
+ * THIS PARAGRAPH HAS BEEN WRONG TWICE, AND BOTH ARE WORTH A LINE. It first said that Apple's signature
+ * "could not be taken as spelled — this tree has no Core Foundation (the plan retracted it, §1)", so the
+ * array was an `NSArray *`. That stopped being true when the binding went back to Core Foundation. It then
+ * described the ELEMENTS as `NSValue` pointer-wrappers — built with `+[NSValue valueWithPointer:]`, read
+ * back with `-pointerValue`, with "an element that is not an `NSValue` REFUSED" — WHICH IS ALSO NOT SO:
+ * CGGradientColors.c reads the array with `CFArrayGetValueAtIndex` and casts the element to `CGColorRef`,
+ * and the only element it refuses is NULL. A conversion can leave a contract's DOCUMENTATION describing a
+ * world that is gone, and of every place in this library this was the one where it did.
  *
- *     NSArray *ramp = @[ [NSValue valueWithPointer:(__bridge const void *)first],
- *                        [NSValue valueWithPointer:(__bridge const void *)second] ];
- *     CGGradientRef g = CGGradientCreateWithColors(CGColorSpaceCreateDeviceRGB(), ramp, NULL);
+ * WHAT IS TRUE, AND IT IS MEASURED IN THAT FILE: the elements ARE `CGColorRef` — a `CGColorRef` here is a
+ * Core Foundation type, so a CFArray holds them natively and no wrapper exists — the minimum is two stops,
+ * and the gradient does not retain the colours, so a caller who keeps the gradient alive owes the colours
+ * their own lifetime. That is Apple's obligation for this function.
  *
- * The array holds no reference to the colours and this function does not take one: a caller who
- * keeps a gradient alive owes the colours their own lifetime, which is the same obligation Apple's
- * CFArray-of-CGColorRef places on a caller and is worth stating because NSValue makes it look free.
- * An element that is not an `NSValue` is REFUSED, and so is a NULL element — one NULL in the array
- * would otherwise become a stop of some invented colour.
+ *     CGColorRef ramp[2] = { first, second };
+ *     CFArrayRef colors = CFArrayCreate(NULL, (const void **)ramp, 2, &kCFTypeArrayCallBacks);
+ *     CGGradientRef g = CGGradientCreateWithColors(CGColorSpaceCreateDeviceRGB(), colors, NULL);
  */
 CGGradientRef CGGradientCreateWithColors(CGColorSpaceRef space, CFArrayRef colors,
 					 const CGFloat *locations);

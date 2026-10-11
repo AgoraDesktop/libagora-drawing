@@ -14,9 +14,11 @@
  * live under an `freetype2/` subdirectory of the X prefix, which is exactly the kind of detail a
  * public header may not force on its includers).
  *
- * THE STRING HELPERS ARE C STRINGS, NOT `NSString *`, for the same reason the colour space names
- * are: the C half of this library does not know what a Foundation string is. The Objective-C half
- * (CGFontNames.m) turns them into `NSString *` at the three doors that return one.
+ * THE STRING HELPERS ARE C STRINGS, NOT STRING OBJECTS, for the same reason the colour space names' are:
+ * CGFont.c does not own a string type. CGFontNames.c turns them into `CFStringRef` at the doors whose
+ * Apple signatures return one. (This said "NOT `NSString *` ... turns them into `NSString *`" — the
+ * distinction the paragraph draws is C STRINGS against STRING OBJECTS, and the object type on the far
+ * side is Core Foundation's now.)
  */
 #ifndef CORE_GRAPHICS_CGFONT_INTERNAL_H
 #define CORE_GRAPHICS_CGFONT_INTERNAL_H

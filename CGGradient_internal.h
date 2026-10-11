@@ -29,8 +29,10 @@
 #include <CoreGraphics/CGGradient.h>
 #include <CoreGraphics/CGGeometry.h>
 
-/* The colours form's C half: CGGradientColors.m unwraps the NSValues and calls here, so the two
- * public constructors share one stop-building function and CANNOT come to different conclusions. */
+/* The colours form's C half: CGGradientColors.c pulls the `CGColorRef` elements out of the CFArray and
+ * calls here, so the two public constructors share one stop-building function and CANNOT come to
+ * different conclusions. (This said "CGGradientColors.m unwraps the NSValues"; the file is C and there
+ * are no NSValues to unwrap.) */
 CGGradientRef cg_gradient_create_with_colors(CGColorSpaceRef space, CGColorRef *colors, size_t count,
 					     const CGFloat *locations);
 

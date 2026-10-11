@@ -58,14 +58,16 @@ CGDataProviderRef CGDataProviderCreateWithFilename(const char *filename);
 CGDataProviderRef CGDataProviderRetain(CGDataProviderRef provider);
 void CGDataProviderRelease(CGDataProviderRef provider);
 
-/* THE FOUNDATION-OBJECT FORM: `NSData *` WHERE APPLE'S NAME SAYS `CFData`. The name is Apple's
- * and stays — this layer duplicates the API, corners included — and the argument is a Foundation
- * object, which is the binding §1 records.
+/* THE `CFData` FORM, WITH APPLE'S NAME AND APPLE'S TYPE: `CGDataProviderCreateWithCFData` takes a
+ * `CFDataRef`. THE ARGUMENT USED TO BE AN `NSData *` — the Fiwix tree had no CoreFoundation and spelled
+ * it with the class it is toll-free with, which this comment used to explain as "the binding §1
+ * records". Agora's Core Graphics depends on Core Foundation, so the type is `CFDataRef`; the name was
+ * always Apple's, and this layer still duplicates the API, corners included.
  *
- * THE BYTES ARE NOT COPIED. The provider takes a reference to the NSData and lets go of it when
- * the provider is released, so the object's lifetime is the provider's; that is Apple's contract
- * for this form and the reason the C half can keep treating "a buffer plus a callback" as the one
- * shape a provider has. */
+ * THE BYTES ARE NOT COPIED. The provider takes a reference to the data object and lets go of it when the
+ * provider is released, so the object's lifetime is the provider's; that is Apple's contract for this
+ * form and the reason the C half can keep treating "a buffer plus a callback" as the one shape a
+ * provider has. */
 CGDataProviderRef CGDataProviderCreateWithCFData(CFDataRef data);
 
 /* THE BYTES AS A FOUNDATION OBJECT — the read side of the same door, and A COPY: the caller owns

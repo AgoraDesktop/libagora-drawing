@@ -9,10 +9,11 @@
  * object is a left-to-right ramp at one call site and a radial burst at the next, and giving the
  * object a direction would be inventing a fact it does not have.
  *
- * THE TWO CONSTRUCTORS MEET AT `cg_gradient_create_with_colors`. The components form turns its
- * numbers into colours and hands them over; the colours form's Objective-C half (CGGradientColors.m)
- * unwraps its NSValues and hands the same thing over. So there is ONE place that decides what a stop
- * is, and a difference between the two forms cannot be introduced by a later edit to one of them.
+ * THE TWO CONSTRUCTORS MEET AT `cg_gradient_create_with_colors`. The components form turns its numbers
+ * into colours and hands them over; the colours form (CGGradientColors.c — C, and with no NSValues in
+ * it) pulls the `CGColorRef` elements out of the CFArray and hands over the same thing. So there is ONE
+ * place that decides what a stop is, and a difference between the two forms cannot be introduced by a
+ * later edit to one of them.
  *
  * THE ARITHMETIC THAT IS ACTUALLY EASY TO GET WRONG IS THE RADIAL ONE, and it is worth saying why
  * before the code: `CGContextDrawRadialGradient` blends between two CIRCLES, not between two radii

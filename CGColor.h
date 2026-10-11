@@ -176,9 +176,10 @@ CGTypeID CGColorGetTypeID(void);
  *
  * APPLE'S OWN COMMENT SAYS WHICH SPACE THEY ARE IN — "Colors in the `Generic' gray color space" — so white
  * and black are not device gray and the distinction matters to anyone who asks the colour what it holds. */
-/* THE DOOR THOSE THREE NAMES ARE FOR. Apple's 10.6 signature takes a `CFStringRef`, so this takes the
- * `NSString *` that is our spelling of one, and an unrecognised name — including nil — gets NULL, which
- * is what Apple's does.
+/* THE DOOR THOSE THREE NAMES ARE FOR. Apple's 10.6 signature takes a `CFStringRef` AND SO DOES THIS ONE —
+ * the line here used to say it took "the `NSString *` that is our spelling of one", which stopped being
+ * true when the binding went back to Core Foundation — and an unrecognised name, nil included, gets NULL,
+ * which is what Apple's does.
  *
  * THE SAME OBJECT COMES BACK EVERY TIME, because that is what a CONSTANT is: a caller may hold one,
  * compare it with the next call's answer, and release it without the library losing what it lent. The

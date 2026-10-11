@@ -10,7 +10,7 @@
  * holds `const void *`, so the wrapper is gone and the conversion to C is the whole of the change
  * (PROVENANCE.md).
  *
- * WHAT THIS FILE DOES NOT DO IS CONVERT COLOURS. It unwraps and hands an array of `CGColorRef` to
+ * WHAT THIS FILE DOES NOT DO IS CONVERT COLOURS. It pulls the colours out of the array and hands them to
  * `cg_gradient_create_with_colors`, which is the same function the components form calls — so a stop means one
  * thing in this library, whichever door it came through.
  */

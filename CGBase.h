@@ -54,28 +54,21 @@
 #include <stdint.h>
 
 /*
- * AND THE FOUNDATION OBJECT TYPES THE SIGNATURES NAME, FOR THE SAME REASON `bool` IS HERE: more
- * than one header takes one. The binding is decided — CoreGraphics here declares its signatures
- * with FOUNDATION types rather than inventing a CF layer (the retracted CoreFoundation plan) — so
- * `CGColorSpaceCreateWithName` takes an `NSString *` and the `…WithCFData`/`…ICCData` forms take
- * an `NSData *`.
+ * AND NOT ONE FOUNDATION OBJECT TYPE IS NAMED HERE ANY MORE. THIS BLOCK USED TO DECLARE THREE —
+ * `NSString`, `NSData` and `NSArray` — forward-declaring each under `__OBJC__` as the class and otherwise
+ * as the opaque struct a class is at the ABI level, so that a Foundation spelling would compile. Its own
+ * first line said the binding was "decided — CoreGraphics here declares its signatures with FOUNDATION
+ * types rather than inventing a CF layer (the retracted CoreFoundation plan)". THE BINDING WENT BACK, AND
+ * THE PARAGRAPH STAYS BECAUSE THE REVERSAL IS THE FACT:
  *
- * A C COMPILER CANNOT SEE `@interface NSString`, so under `__OBJC__` these are forward
- * declarations of the classes and otherwise the opaque structs a class is at the ABI level. A C
- * caller passes and receives those pointers and never looks inside them; the Objective-C
- * translation units that do look import Foundation. THE SPELLING WAS MEASURED BEFORE IT WAS
- * WRITTEN — both directions compile, link and run, and the linker agreeing is what "the same
- * type" means across two languages — and stating it ONCE here is what keeps a third header from
- * rediscovering it.
- *
- * APPLE'S HEADERS SOLVE THE SAME PROBLEM UNDER ANOTHER NAME: their `CFStringRef` is a bridged
- * declaration in a C header. There is no CF here, so the spelling is the Foundation class itself.
- *
- * `NSArray` JOINED THIS LIST WHEN THE FIRST SIGNATURE NEEDED ONE — `CGGradientCreateWithColors`
- * (C6.1), whose Apple form is a `CFArrayRef` of `CGColorRef`. The class is named here for the same
- * reason as the other two and NOT because an array takes an arbitrary place in these signatures: it
- * is the Foundation counterpart of Apple's `CFArrayRef`, and what may live INSIDE it is that
- * function's business, not this header's.
+ *   - the signatures in this library are the CF types themselves — `CFStringRef`, `CFDataRef`,
+ *     `CFArrayRef`, `CFDictionaryRef`, `CFURLRef`, `CFErrorRef` — which Core Foundation declares for a C
+ *     compiler, so no header here invents a spelling or forwards a declaration;
+ *   - the three forward declarations are gone WITH them, and so is every use of their names: a C caller
+ *     needs no Objective-C runtime to name a colour space or build a provider;
+ *   - and NOTHING IN THIS LIBRARY IMPORTS FOUNDATION. That is MEASURED and not asserted: every include
+ *     across this library's headers and sources is <CoreFoundation/...>, and the .so links against
+ *     libagora-core (PROVENANCE.md).
  */
 /* THE CORE FOUNDATION OBJECT TYPES THE SIGNATURES NAME. Agora's Core Graphics depends on Core Foundation
  * (PROVENANCE.md): where the Fiwix tree spelled every CF type as the Foundation class it is toll-free with,

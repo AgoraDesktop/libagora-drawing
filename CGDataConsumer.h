@@ -9,9 +9,11 @@
  * the sink is full, which is how a caller writing a stream learns to stop. `releaseConsumer` is the pair to
  * the `info` pointer, exactly as a provider's `releaseInfo` is.
  *
- * THE FOUNDATION-OBJECT FORMS ARE SPELLED WITH FOUNDATION TYPES, as this library's other CF-typed doors are:
- * Apple's `…WithCFData` takes a `CFMutableDataRef` and its `…WithURL` a `CFURLRef`, and here they take the
- * `NSMutableData *` and `NSURL *` those two are toll-free with. BOTH ARE BUILT ON THE CALLBACK FORM — the
+ * THE TWO CONVENIENCE FORMS ARE SPELLED WITH APPLE'S TYPES: `CGDataConsumerCreateWithCFData` takes a
+ * `CFMutableDataRef` and `CGDataConsumerCreateWithURL` a `CFURLRef`. THEY USED TO TAKE THE `NSMutableData *`
+ * AND `NSURL *` those two are toll-free with — the Fiwix tree had no CoreFoundation — and this comment
+ * called that "spelled with FOUNDATION types, as this library's other CF-typed doors are". They are
+ * CF-typed doors now. BOTH ARE BUILT ON THE CALLBACK FORM — the
  * object is the `info` and the appending (or writing) is the callback — which is why this header's one
  * mechanism is the general one and the two convenience forms add nothing to the contract.
  *

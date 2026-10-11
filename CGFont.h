@@ -36,9 +36,10 @@
  * font retains the provider and the provider's own contract — the bytes stay valid until it is
  * released — becomes the font's. Nothing is copied.
  *
- * THE STRING DOORS RETURN `NSString *` WHERE APPLE'S SAY `CFStringRef`, which is this tree's
- * established spelling for the CF-typed doors (see CGDataProvider.h's argument about
- * `CGDataProviderCreateWithCFData`). The two are toll-free in Apple's API and one type here.
+ * AND THE STRING DOORS RETURN `CFStringRef`, WHICH IS APPLE'S OWN SIGNATURE. This paragraph used to say
+ * they returned `NSString *` and called that "this tree's established spelling"; it is no longer the
+ * spelling, because the binding went back to Core Foundation. `CGFontCreateWithFontName` takes a
+ * `CFStringRef` and the three Copy doors return one, so a caller needs no Objective-C runtime here.
  */
 #ifndef CORE_GRAPHICS_CGFONT_H
 #define CORE_GRAPHICS_CGFONT_H
@@ -52,14 +53,12 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-/* THE OPAQUE STRING SPELLING, COPIED FROM CGColorSpace.h WHERE IT IS ALREADY USED: a C caller
- * needs the TYPE to write the name, not the implementation, and this keeps `CGFont.h` includable
- * from a translation unit with no Objective-C runtime in it. */
-#ifdef __OBJC__
-@class NSString;
-#else
-typedef struct objc_object NSString;
-#endif
+/* AND NO FORWARD DECLARATION OF `NSString` STANDS HERE ANY MORE. One did — under `__OBJC__` as the
+ * class, otherwise as the opaque struct a class is at the ABI level — because the string doors in this
+ * header were spelled `NSString *`. THEY ARE `CFStringRef` NOW (`CGFontCreateWithFontName`,
+ * `CGFontCopyPostScriptName`, `CGFontCopyFullName`, `CGFontCopyGlyphNameForGlyph`, and the variation-axis
+ * names below), so nothing here names a Foundation class or needs one: the type a C caller writes a font
+ * name with comes from <CoreFoundation/CFString.h> through CGBase.h. */
 
 typedef unsigned short CGFontIndex;
 typedef CGFontIndex CGGlyph;
@@ -169,10 +168,11 @@ enum {
 	CGGlyphMax = kCGGlyphMax
 };
 
-/* THE VARIATION-AXIS NAMES: `CFStringRef` CONSTANTS IN APPLE'S HEADER AND `NSString *` HERE, this
- * tree's binding for every CF type (see CGBase.h). They are THE KEYS OF THE AXES DICTIONARY a caller
- * passes to `CGFontCreateCopyWithVariations`, so their spelling is part of the interface: a caller
- * writes `kCGFontVariationAxisName` and expects the dictionary to be read by that name. */
+/* THE VARIATION-AXIS NAMES: `CFStringRef` CONSTANTS HERE, WHICH IS WHAT APPLE'S HEADER DECLARES TOO.
+ * (This said `NSString *` "here" against `CFStringRef` in Apple's header, "this tree's binding for every
+ * CF type"; the binding is Core Foundation now.) They are THE KEYS OF THE AXES DICTIONARY a caller
+ * passes to `CGFontCreateCopyWithVariations`, so their spelling is part of the interface — and with both
+ * sides `CFStringRef` there is one name a caller writes and one the dictionary is read by. */
 extern const CFStringRef kCGFontVariationAxisName;
 extern const CFStringRef kCGFontVariationAxisMinValue;
 extern const CFStringRef kCGFontVariationAxisMaxValue;

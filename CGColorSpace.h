@@ -153,27 +153,20 @@ CGColorSpaceRef CGColorSpaceCreateICCBased(size_t nComponents, const CGFloat *ra
 					   CGDataProviderRef profile, CGColorSpaceRef alternate);
 
 /* ---------------------------------------------------------------------------------------
- * THE SYSTEM-DEFINED SPACES, BY NAME — AND THE FIRST FOUNDATION OBJECTS IN THIS HEADER.
+ * THE SYSTEM-DEFINED SPACES, BY NAME — AND THEY ARE `CFStringRef`, AS APPLE'S ARE.
  *
- * Apple names them with `CFStringRef` constants; this tree names them `NSString *`, because the
- * retracted CoreFoundation plan settled that CoreGraphics here declares its signatures with
- * FOUNDATION types rather than inventing a CF layer. That leaves one mechanical question, and IT
- * WAS MEASURED BEFORE IT WAS WRITTEN: a C compiler cannot see `@interface NSString`, so under
- * `__OBJC__` this header forward-declares the class, and under a C compiler it declares the
- * opaque struct a class is at the ABI level. A C caller passes and receives that pointer and
- * never looks inside it; the one translation unit that does is Objective-C, imports Foundation,
- * and is compiled by the tree's Objective-C wrapper.
+ * THIS BLOCK USED TO SAY THE OPPOSITE, WHICH IS WHY IT IS WORTH A PARAGRAPH. The Fiwix tree this
+ * library came from had no CoreFoundation and spelled every name `NSString *`; its note here went
+ * further and claimed `libcoregraphics.so.1` DEPENDS ON libfoundation "because comparing a name is a
+ * message send". NEITHER IS TRUE OF AGORA'S CORE GRAPHICS:
  *
- * THE COST IS REAL AND IS PAID WHERE IT IS STATED: `libcoregraphics.so.1` now DEPENDS ON
- * libfoundation, because comparing a name is a message send. There is no honest route around
- * it — the names ARE the API — and the alternative would be inventing C-string-keyed functions
- * Apple does not have.
+ *   - `CGColorSpaceCreateWithName` takes a `CFStringRef` and `CGColorSpaceCopyName` returns one, as
+ *     do the ICC forms below, so a C caller needs no Objective-C runtime to build or read a space;
+ *   - the forward declaration of `NSString` that stood under this comment IS GONE. It existed only to
+ *     let the Foundation spelling compile, and no signature in this header names it any more;
+ *   - nothing here imports Foundation, and that is MEASURED: every include in this library is
+ *     <CoreFoundation/...>, and the .so links against libagora-core (PROVENANCE.md).
  * ------------------------------------------------------------------------------------- */
-#ifdef __OBJC__
-@class NSString;
-#else
-typedef struct objc_object NSString;
-#endif
 
 /* The names this library answers with an EXACT profile — exact in the sense that matters: each
  * space's white point, primaries and transfer function are given to the engine rather than
@@ -189,8 +182,9 @@ typedef struct objc_object NSString;
  * (10.4, and Apple-DEPRECATED), GenericRGBLinear (10.5), and GenericCMYK (10.4, refused for want
  * of a profile that could be invented). */
 /* THE FOUR GENERIC SPACES: what a caller asks for when it wants "a gray space" or "an RGB space"
- * and does not care which. Apple's names, this tree's type for them, declared the way the three below
- * are — see the note above for why the type is `NSString *`. */
+ * and does not care which. APPLE'S NAMES AND APPLE'S TYPE — `CFStringRef`, declared the way the three
+ * below are. (This comment used to end "see the note above for why the type is `NSString *`"; the note
+ * above no longer says that, because it is not so.) */
 extern const CFStringRef kCGColorSpaceGenericGray;
 extern const CFStringRef kCGColorSpaceGenericRGB;
 extern const CFStringRef kCGColorSpaceGenericCMYK;

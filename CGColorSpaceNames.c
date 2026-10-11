@@ -7,12 +7,15 @@
  * THE NAMES ARE `CFStringRef`, WHICH IS APPLE'S OWN SIGNATURE: Agora's Core Graphics depends on Core
  * Foundation, so the Fiwix tree's `NSString *` is gone and this file is C (PROVENANCE.md).
  *
- * THE REST OF THE LIBRARY DOES NOT KNOW THIS FILE EXISTS. `CGColorSpace.h` declares the parameters
- * and the constants as `NSString *` with an opaque spelling under a C compiler, and this is the
- * only translation unit that IMPORTS Foundation and can therefore compare and message them. THE
- * SPLIT WAS MEASURED BEFORE IT WAS WRITTEN: a C translation unit passing an `NSString *` to an
- * Objective-C one, and an Objective-C one returning a class pointer to C, both compile, link and
- * run — that is what "the same type" means across the two languages.
+ * THE REST OF THE LIBRARY DOES NOT KNOW THIS FILE EXISTS. `CGColorSpace.h` declares the parameters and
+ * the constants as `CFStringRef`, and this is the only translation unit that walks the name registry, so
+ * nothing else in the library ever compares a name.
+ *
+ * IT USED TO CLAIM MORE THAN THAT, AND NONE OF IT IS TRUE NOW: that this was "the only translation unit
+ * that IMPORTS Foundation", that `CGColorSpace.h` declared the constants as `NSString *` "with an opaque
+ * spelling under a C compiler", and a measured argument about passing an `NSString *` between a C and an
+ * Objective-C translation unit. NOTHING IN THIS LIBRARY IMPORTS FOUNDATION — there is no `#import`
+ * anywhere in it — no header names an `NSString`, and the comparison is `CFEqual` over `CFStringRef`.
  *
  * NO ARC HERE, WHICH IS THE LIBRARY'S POLICY AND NOT AN OVERSIGHT (user, 2026-09-19): ARC is for
  * everything that USES Foundation, and using it in the library itself is unimportant so long as
