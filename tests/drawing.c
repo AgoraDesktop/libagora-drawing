@@ -917,6 +917,207 @@ static int case_radial_gradient_matches_the_shading(void)
 	return g_fail - before;
 }
 
+/* Two readers the cases below share: how many pixels of a buffer are non-zero, and whether one is. */
+static size_t painted_pixels(const unsigned char *buf, size_t side)
+{
+	size_t i, n = 0;
+
+	for (i = 0; i < side * side; i++) {
+		if ((buf[i * 4] | buf[i * 4 + 1] | buf[i * 4 + 2] | buf[i * 4 + 3]) != 0) {
+			n++;
+		}
+	}
+	return n;
+}
+
+/* THE ROW IS CONVERTED, BECAUSE THE TWO COORDINATES IN PLAY ARE NOT THE SAME ONE. A clip or a stroke is
+ * given in USER space, whose origin is the BOTTOM LEFT, and a buffer's first row is the TOP one. This
+ * helper takes USER-space y and flips it. IT DID NOT, IN ITS FIRST VERSION, and the clip case failed on a
+ * pixel that was inside the clip: the count was right and the spot check was reading the mirror image of
+ * the pixel it asked for. The stroke case passed with the same mistake because a rectangle is symmetric --
+ * which is how a wrong helper survives one case and breaks the next. */
+static int pixel_lit(const unsigned char *buf, size_t side, size_t x, size_t y)
+{
+	size_t row = side - 1 - y;
+
+	return (buf[(row * side + x) * 4] | buf[(row * side + x) * 4 + 3]) != 0;
+}
+
+/* ------------------------------------------------------------------------ */
+/* clips, strokes, and the colour component doors                            */
+/* ------------------------------------------------------------------------ */
+
+/* A CLIP CONTAINS A LATER FILL -- AND CLIPS ACCUMULATE, WHICH IS THE PART THAT IS EASY TO GET WRONG AND
+ * WAS, HERE, IN THE PROBE THAT MEASURED THIS. Every sub-check therefore starts from a FRESH CONTEXT: the
+ * first version reused one, so its second measurement was the intersection of two clips and its third was
+ * a third of that, and both looked like defects in the library. The last sub-check asserts the
+ * accumulation on purpose, so that what misled the probe is held rather than merely known.
+ *
+ * MEASURED, all four with a fresh context:
+ *
+ *   one 4x4 rect clip, then fill all     16 painted     (the rect's area)
+ *   two rects clip, then fill all        20 painted     (16 + 4 -- the UNION of the rects)
+ *   a 5x5 rect path clip, then fill all  25 painted     (the path's area)
+ *   two clips in a row                    9 painted     (their INTERSECTION: 3x3) */
+static int case_clip_confines_a_fill(void)
+{
+	int before = g_fail;
+	const size_t side = 16, bpr = side * 4;
+	unsigned char *buf = (unsigned char *)calloc(side, bpr);
+	CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+	CGRect two[2] = { { 4, 4, 4, 4 }, { 10, 10, 2, 2 } };
+	CGMutablePathRef path;
+	CGContextRef ctx;
+
+	check(buf != NULL && rgb != NULL, "the test could not set up");
+	if (buf == NULL || rgb == NULL) {
+		return g_fail - before;
+	}
+
+#define FRESH_CTX() (memset(buf, 0, side * bpr), CGBitmapContextCreate(buf, side, side, 8, bpr, rgb, \
+	kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little))
+#define FILL_ALL() (CGContextSetRGBFillColor(ctx, 1, 0, 0, 1), CGContextFillRect(ctx, CGRectMake(0, 0, 16, 16)))
+
+	ctx = FRESH_CTX();
+	check(ctx != NULL, "the context for the clip checks was refused");
+	if (ctx == NULL) {
+		return g_fail - before;
+	}
+	CGContextClipToRect(ctx, CGRectMake(4, 4, 4, 4));
+	FILL_ALL();
+	check(painted_pixels(buf, side) == 16, "a 4x4 clip let %zu pixels through, want 16",
+	      painted_pixels(buf, side));
+	check(!pixel_lit(buf, side, 2, 2) && pixel_lit(buf, side, 5, 5),
+	      "the clip did not confine the fill to its own rect");
+
+	ctx = FRESH_CTX();
+	CGContextClipToRects(ctx, two, 2);
+	FILL_ALL();
+	check(painted_pixels(buf, side) == 20, "two rects let %zu pixels through, want 20 (the union)",
+	      painted_pixels(buf, side));
+
+	ctx = FRESH_CTX();
+	path = CGPathCreateMutable();
+	CGPathAddRect(path, NULL, CGRectMake(2, 2, 5, 5));
+	CGContextAddPath(ctx, path);
+	CGContextClip(ctx);
+	FILL_ALL();
+	check(painted_pixels(buf, side) == 25, "a 5x5 path clip let %zu pixels through, want 25",
+	      painted_pixels(buf, side));
+
+	ctx = FRESH_CTX();
+	CGContextClipToRect(ctx, CGRectMake(4, 4, 4, 4));
+	CGContextClipToRect(ctx, CGRectMake(2, 2, 5, 5));
+	FILL_ALL();
+	check(painted_pixels(buf, side) == 9,
+	      "two clips in one context let %zu pixels through, want 9: clips ACCUMULATE, and a case that "
+	      "reuses a context is measuring their intersection", painted_pixels(buf, side));
+#undef FRESH_CTX
+#undef FILL_ALL
+	return g_fail - before;
+}
+
+/* A STROKE PAINTS A RING RATHER THAN A DISC, AND THE HIT TEST ANSWERS ABOUT THE OUTLINE. The second half is
+ * CGContext.h's own claim -- "the stroke modes stroke the path FIRST and ask the same question of the
+ * outline" -- made observable, and the point that shows it is (0.5, 8) at line width 4: it is OUTSIDE the
+ * rectangle and ON the stroked band, so kCGPathStroke contains it and kCGPathFill does not. A first
+ * measurement left the width at its default and probed the outline's exact edge, where either answer is
+ * defensible; the width is set here so the band has an inside.
+ *
+ * MEASURED: a 12x12 rect stroked at width 2 paints 96 pixels with its edges lit and (8,8) clear; the hit
+ * test at width 4 gives (2,8) stroke=1 fill=1, (8,8) stroke=0 fill=1, (0.5,8) stroke=1 fill=0, and
+ * kCGPathFillStroke at the centre 1, because Apple's sentence is "stroked OR filled". */
+static int case_stroke_and_hit_test(void)
+{
+	int before = g_fail;
+	const size_t side = 16, bpr = side * 4;
+	unsigned char *buf = (unsigned char *)calloc(side, bpr);
+	CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+	CGContextRef ctx;
+
+	check(buf != NULL && rgb != NULL, "the test could not set up");
+	if (buf == NULL || rgb == NULL) {
+		return g_fail - before;
+	}
+	memset(buf, 0, side * bpr);
+	ctx = CGBitmapContextCreate(buf, side, side, 8, bpr, rgb,
+				    kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+	check(ctx != NULL, "the context for the stroke checks was refused");
+	if (ctx == NULL) {
+		return g_fail - before;
+	}
+	CGContextSetLineWidth(ctx, 2);
+	CGContextSetRGBStrokeColor(ctx, 1, 0, 0, 1);
+	CGContextStrokeRect(ctx, CGRectMake(2, 2, 12, 12));
+	check(painted_pixels(buf, side) > 0, "stroking a rectangle painted nothing at all");
+	check(pixel_lit(buf, side, 2, 8), "the left edge of a stroked rectangle is not painted");
+	check(pixel_lit(buf, side, 8, 14), "the top edge of a stroked rectangle is not painted");
+	check(!pixel_lit(buf, side, 8, 8), "the INSIDE of a stroked rectangle was painted: a stroke is a ring");
+
+	/* THE HIT TEST, ON A FRESH CONTEXT SO THE CLIP ABOVE CANNOT BE IN PLAY. */
+	memset(buf, 0, side * bpr);
+	ctx = CGBitmapContextCreate(buf, side, side, 8, bpr, rgb,
+				    kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+	if (ctx != NULL) {
+		CGContextSetLineWidth(ctx, 4);
+		CGContextAddRect(ctx, CGRectMake(2, 2, 12, 12));
+		check(CGContextPathContainsPoint(ctx, CGPointMake(0.5, 8), kCGPathStroke),
+		      "a point on the stroked band but OUTSIDE the rectangle is not contained in stroke mode; "
+		      "the header says the stroke modes ask about the outline");
+		check(!CGContextPathContainsPoint(ctx, CGPointMake(0.5, 8), kCGPathFill),
+		      "a point outside the rectangle is contained in fill mode");
+		check(!CGContextPathContainsPoint(ctx, CGPointMake(8, 8), kCGPathStroke),
+		      "the centre of the rectangle is contained in STROKE mode; it is not on the outline");
+		check(CGContextPathContainsPoint(ctx, CGPointMake(8, 8), kCGPathFill),
+		      "the centre of the rectangle is not contained in fill mode");
+		check(CGContextPathContainsPoint(ctx, CGPointMake(8, 8), kCGPathFillStroke),
+		      "the centre is not contained in the combined mode, which is the union");
+	}
+	return g_fail - before;
+}
+
+/* THE COLOUR'S COMPONENTS, WHICH CGColor.h DESCRIBES IN THREE SENTENCES AND THIS HOLDS ALL THREE:
+ * "THE COMPONENTS ARE STORED WITH ALPHA LAST", a gray colour is its own family with its own count, and
+ * CGColorEqualToColor is "EQUAL WHEN THE SPACE MODEL AND EVERY COMPONENT MATCH. Not pointer equality".
+ *
+ * MEASURED: an RGB colour answers 4 components -- 0.250 0.500 0.750 1.000 for the values printed,
+ * alpha LAST -- and a gray one answers 2, {0.500, 0.500} for a gray of 0.5 and an alpha of 0.5, because
+ * the gray's second component IS its alpha. Two separately built identical colours are equal and are NOT
+ * the same pointer, and a red against a gray is not equal, which is the space model being part of it. */
+static int case_colour_components(void)
+{
+	int before = g_fail;
+	CGColorRef one = CGColorCreateGenericRGB(0.25, 0.5, 0.75, 1.0);
+	CGColorRef same = CGColorCreateGenericRGB(0.25, 0.5, 0.75, 1.0);
+	CGColorRef gray = CGColorCreateGenericGray(0.5, 0.5);
+	CGColorRef red = CGColorCreateGenericRGB(1.0, 0.0, 0.0, 1.0);
+	const CGFloat *c;
+
+	check(one != NULL && same != NULL && gray != NULL && red != NULL, "a colour was refused");
+	if (one == NULL || same == NULL || gray == NULL || red == NULL) {
+		return g_fail - before;
+	}
+	check(CGColorGetNumberOfComponents(one) == 4, "an RGB colour answers %zu components, want 4",
+	      CGColorGetNumberOfComponents(one));
+	c = CGColorGetComponents(one);
+	check(c[0] == 0.25 && c[1] == 0.5 && c[2] == 0.75 && c[3] == 1.0,
+	      "the components are %.3f %.3f %.3f %.3f, want 0.250 0.500 0.750 1.000 with ALPHA LAST",
+	      (double)c[0], (double)c[1], (double)c[2], (double)c[3]);
+	check(CGColorGetAlpha(one) == 1.0, "the alpha of an opaque colour is %g", (double)CGColorGetAlpha(one));
+
+	check(CGColorGetNumberOfComponents(gray) == 2, "a gray colour answers %zu components, want 2",
+	      CGColorGetNumberOfComponents(gray));
+	c = CGColorGetComponents(gray);
+	check(c[0] == 0.5 && c[1] == 0.5 && CGColorGetAlpha(gray) == 0.5,
+	      "the gray's components are %.3f %.3f and its alpha %.3f, want 0.500 0.500 and 0.500",
+	      (double)c[0], (double)c[1], (double)CGColorGetAlpha(gray));
+
+	check(CGColorEqualToColor(one, same), "two identical colours are not equal");
+	check(one != same, "two separately built colours are the SAME POINTER");
+	check(!CGColorEqualToColor(red, gray), "a red and a gray are equal; the space model is not compared");
+	return g_fail - before;
+}
+
 static int run_in_child(const char *name, int (*fn)(void))
 {
 	pid_t pid;
@@ -964,6 +1165,9 @@ static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "A radial shading, and that swapping its circles swaps the ramp", case_radial_shading },
 	{ "The radial degenerate cases, and the two refusals", case_radial_degenerate_and_refusals },
 	{ "The radial gradient and the radial shading are one ramp", case_radial_gradient_matches_the_shading },
+	{ "A clip confines a fill, and clips accumulate", case_clip_confines_a_fill },
+	{ "A stroke is a ring, and the hit test asks about the outline", case_stroke_and_hit_test },
+	{ "The colour component doors", case_colour_components },
 };
 
 int main(void)
