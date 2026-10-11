@@ -42,21 +42,26 @@
  * primaries and curve parameters each one needs were measured when it was built, and a later era
  * decision that puts one back in scope has them written down there rather than to re-derive.
  *
- * WHAT REMAINS ABSENT FOR REASONS THAT ARE NOT THE ERA, and stays `open` in the ledger where an
- * unimplemented name belongs: the `Extended…` family and `kCGColorSpaceACESCGLinear` are outside
- * 0..1 or built on HDR curves, and `kCGColorSpaceGenericCMYK` has no profile that can be
- * invented (what ink values mean depends on the press) — BUT THE NAMES OF ALL FOUR SHIP, AND A NAME IS
- * NOT THE THING IT NAMES: `kCGColorSpaceGenericRGB`, `kCGColorSpaceGenericGray` and
- * `kCGColorSpaceGenericRGBLinear` are IN era, their constants are declared, and what is still owed is the
- * PROFILE each one should reach, which is why the dispatch below returns NULL for them. THAT THE LEDGER
- * CANNOT SAY BOTH THINGS AT ONCE IS A FACT ABOUT THE LEDGER: a `var` row records that a NAME is declared
- * (the sweep's `--check` verifies exactly that and nothing more), so "simply not implemented yet" and
- * "shipped" are both true of one row, and this file is where the second half lives.
+ * THE FOUR GENERIC NAMES ARE NO LONGER OWED, AND THIS PARAGRAPH USED TO SAY THEY WERE. It read: "what
+ * is still owed is the PROFILE each one should reach, which is why the dispatch below returns NULL for
+ * them", and about CMYK that it "has no profile that can be invented (what ink values mean depends on the
+ * press)". BOTH HALVES ARE ANSWERED BELOW AND THE DISPATCH NO LONGER RETURNS NULL FOR ANY OF THE FOUR. A
+ * name is not the thing it names, and `kCGColorSpaceGenericGray`, `kCGColorSpaceGenericRGB`,
+ * `kCGColorSpaceGenericRGBLinear` and `kCGColorSpaceGenericCMYK` now reach a profile each — three built
+ * here from values the user chose and recorded as a deviation, one from profile bytes embedded in this
+ * library. The ledger's `var` row still records only that a NAME is declared, which is why the second half
+ * belongs in this file.
+ *
+ * WHAT REMAINS ABSENT FOR REASONS THAT ARE NOT THE ERA, and stays `open` where an unimplemented name
+ * belongs: the `Extended…` family and `kCGColorSpaceACESCGLinear`, which are outside 0..1 or built on HDR
+ * curves.
  */
 #include <CoreFoundation/CoreFoundation.h>
 
 #include <CoreGraphics/CGColorSpace.h>
 #include <CoreGraphics/CGColorSpace_internal.h>
+
+#include <CoreGraphics/CGGenericCMYKProfile.h>
 
 #include <lcms2.h>
 #include <stdio.h>
@@ -176,6 +181,59 @@ static cmsHPROFILE cg_profile_for_name(CFStringRef name, CGColorSpaceModel *mode
 		p = cmsCreateGrayProfile(&wp, g);
 		cmsFreeToneCurve(g);
 		return p;
+	}
+	/* ---------------------------------------------------------------------------------------
+	 * THE FOUR NAMES THAT USED TO REACH THE REFUSAL BELOW, AND THE VALUES THEY CARRY ARE A CHOICE THE
+	 * USER TOOK RATHER THAN A SPECIFICATION THAT COULD BE READ — which is why it is stated here.
+	 *
+	 * Apple publishes the NAMES of these spaces and not their numbers; the only ICC profiles on this
+	 * machine that call themselves generic are Artifex's sRGB and sGray, which are the sRGB spaces under
+	 * another name and so cannot define GenericRGB. THE CHOICE, RECORDED AS A DEVIATION LIKE THE OTHERS:
+	 *
+	 *   GenericGray       D65, gamma 1.0        a neutral gray with no transfer function
+	 *   GenericRGB        D65, Rec709 primaries, gamma 1.8
+	 *   GenericRGBLinear  D65, Rec709 primaries, gamma 1.0
+	 *
+	 * THE PRIMARIES AND THE WHITE POINT ARE NOT RECALLED. They are read out of the engine this library
+	 * already stands on — lcms2's own `cmsCreate_sRGBProfileTHR`, `lcms2/src/cmsvirt.c:655-659`, which
+	 * spells D65 as {0.3127, 0.3290} (the same pair CG_D65_X/CG_D65_Y above holds) and the primaries as
+	 * {0.6400, 0.3300} {0.3000, 0.6000} {0.1500, 0.0600}. Deriving them from an ICC profile's colorant
+	 * matrix instead gives DIFFERENT numbers — 0.6485, 0.3309 and friends, measured — because ICC
+	 * matrices are stored adapted to D50, which is a property of the format and not of sRGB. */
+	if (CFEqual(name, kCGColorSpaceGenericGray)) {
+		*model = kCGColorSpaceModelMonochrome;
+		*components = 1;
+		wp = cg_xy(CG_D65_X, CG_D65_Y);
+		g = cmsBuildGamma(NULL, 1.0);
+		if (g == NULL) {
+			return NULL;
+		}
+		p = cmsCreateGrayProfile(&wp, g);
+		cmsFreeToneCurve(g);
+		return p;
+	}
+	if (CFEqual(name, kCGColorSpaceGenericRGB)) {
+		*model = kCGColorSpaceModelRGB;
+		*components = 3;
+		return cg_rgb_profile(CG_D65_X, CG_D65_Y, 0.6400, 0.3300, 0.3000, 0.6000, 0.1500, 0.0600,
+				      1.8);
+	}
+	if (CFEqual(name, kCGColorSpaceGenericRGBLinear)) {
+		*model = kCGColorSpaceModelRGB;
+		*components = 3;
+		return cg_rgb_profile(CG_D65_X, CG_D65_Y, 0.6400, 0.3300, 0.3000, 0.6000, 0.1500, 0.0600,
+				      1.0);
+	}
+	/* AND THE ONE THAT CANNOT BE DERIVED AT ALL. lcms2 builds an RGB profile from primaries and a gray one
+	 * from a white point and a curve, and has NO CMYK CONSTRUCTOR: what ink values mean depends on the
+	 * press. The bytes are embedded rather than loaded from a path, by the user's decision, and they are
+	 * Artifex's PS CMYK profile — a SUBSTITUTION FOR APPLE'S that CGGenericCMYKProfile.h states with the
+	 * source, the size and the digest it was generated from. */
+	if (CFEqual(name, kCGColorSpaceGenericCMYK)) {
+		*model = kCGColorSpaceModelCMYK;
+		*components = 4;
+		return cmsOpenProfileFromMem(cg_generic_cmyk_profile,
+					     (cmsUInt32Number)CG_GENERIC_CMYK_PROFILE_BYTES);
 	}
 	return NULL;
 }
