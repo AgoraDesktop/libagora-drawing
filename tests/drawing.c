@@ -20,6 +20,8 @@
  * while two classes sharing an id must.
  */
 #include <CoreGraphics/CGBase.h>
+#include <CoreGraphics/CGBitmapContext.h>
+#include <CoreGraphics/CGGeometry.h>
 #include <CoreGraphics/CGColor.h>
 #include <CoreGraphics/CGColorSpace.h>
 #include <CoreGraphics/CGContext.h>
@@ -272,6 +274,149 @@ static int case_consumer_and_gradient(void)
 /* the runner                                                               */
 /* ------------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------------ */
+/* the drawing core: a context that actually paints, a path, and a font      */
+/* ------------------------------------------------------------------------ */
+
+/* A FILL THAT REACHES THE PIXELS, WHICH IS THE ONE THING NO HEADER CAN PROMISE. The buffer is the
+ * context's, the fill is opaque red, and the check reads the BYTES back. THE PIXEL ORDER IS THE
+ * IMPLEMENTATION'S OWN AND ITS HEADERS STATE IT: CGBitmapContext.h and CGImage.h both say 8 bits per
+ * component with kCGImageAlphaPremultipliedFirst and kCGBitmapByteOrder32Little, which puts a pixel in
+ * memory as B, G, R, A. The assertion is written against that and not against a convenient one.
+ *
+ * AND THE TWO DOORS THAT REFUSE LIVE HERE TOO, because they need a context: neither has a getter, so what
+ * can be held is that they are CALLABLE and that a text-drawing mode this library does not honour is
+ * refused rather than acted on. What that catches is the likeliest regression -- a door that starts
+ * crashing or halting instead of declining. */
+static int case_bitmap_context_fill(void)
+{
+	int before = g_fail;
+	const size_t width = 4, height = 3, bpr = width * 4;
+	unsigned char *buffer = (unsigned char *)calloc(height, bpr);
+	CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+	CGContextRef ctx;
+	CGImageRef image;
+	size_t i;
+	int all_red = 1, mode;
+
+	check(buffer != NULL && rgb != NULL, "the test could not allocate its buffer or space");
+	if (buffer == NULL || rgb == NULL) {
+		return g_fail - before;
+	}
+	ctx = CGBitmapContextCreate(buffer, width, height, 8, bpr, rgb,
+				    kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+	check(ctx != NULL, "CGBitmapContextCreate refused an 8-bit RGBA buffer");
+	if (ctx == NULL) {
+		return g_fail - before;
+	}
+	check(CGBitmapContextGetData(ctx) == buffer, "the context does not answer the caller's own buffer");
+	check(CGBitmapContextGetBytesPerRow(ctx) == bpr, "the context answers %zu bytes per row, want %zu",
+	      CGBitmapContextGetBytesPerRow(ctx), bpr);
+
+	check(buffer[0] == 0 && buffer[1] == 0 && buffer[2] == 0 && buffer[3] == 0,
+	      "the caller's buffer was not handed over as zeros");
+
+	CGContextSetRGBFillColor(ctx, 1, 0, 0, 1);
+	CGContextFillRect(ctx, CGRectMake(0, 0, (CGFloat)width, (CGFloat)height));
+	for (i = 0; i < width * height; i++) {
+		const unsigned char *px = buffer + i * 4;
+
+		if (!(px[2] > 200 && px[1] < 60 && px[0] < 60 && px[3] > 200)) {
+			all_red = 0;
+			fprintf(stderr, "FAIL: pixel %zu is B=%u G=%u R=%u A=%u\n", i, px[0], px[1], px[2], px[3]);
+			break;
+		}
+	}
+	check(all_red, "an opaque red fill did not reach every pixel (B,G,R,A order)");
+
+	image = CGBitmapContextCreateImage(ctx);
+	check(image != NULL, "CGBitmapContextCreateImage answered nothing");
+	check(image != NULL && CGImageGetWidth(image) == width && CGImageGetHeight(image) == height,
+	      "the image is %zux%zu, want %zux%zu", image ? CGImageGetWidth(image) : 0,
+	      image ? CGImageGetHeight(image) : 0, width, height);
+	check(image != NULL && CGImageGetBitsPerPixel(image) == 32, "the image answers %zu bits per pixel",
+	      image ? CGImageGetBitsPerPixel(image) : 0);
+
+	/* THE REFUSALS, INTO WHICH EVERY VALUE IS FED RATHER THAN THE ONE A CALLER WOULD CHOOSE. */
+	CGContextSetAllowsFontSubpixelQuantization(ctx, true);
+	CGContextSetAllowsFontSubpixelQuantization(ctx, false);
+	for (mode = 0; mode <= 7; mode++) {
+		CGContextSetTextDrawingMode(ctx, (CGTextDrawingMode)mode);
+	}
+	return g_fail - before;
+}
+
+/* A PATH'S THREE QUESTIONS: is it empty, does it contain a point, and what is its box. The triangle is
+ * (0,0), (4,0), (4,4) closed, so the box is 4x4 and a point at (3,1) is inside it while (-1,-1) is not --
+ * and a rectangle added at (10,10) makes the box 12 wide, which is what a box is a UNION of. */
+static int case_path(void)
+{
+	int before = g_fail;
+	CGMutablePathRef path = CGPathCreateMutable();
+	CGRect box;
+	CGPoint inside = { 3.0, 1.0 };
+	CGPoint outside = { -1.0, -1.0 };
+
+	check(path != NULL, "CGPathCreateMutable answered nothing");
+	if (path == NULL) {
+		return g_fail - before;
+	}
+	check(CGPathIsEmpty(path), "a path just created says it is not empty");
+	CGPathMoveToPoint(path, NULL, 0, 0);
+	CGPathAddLineToPoint(path, NULL, 4, 0);
+	CGPathAddLineToPoint(path, NULL, 4, 4);
+	CGPathCloseSubpath(path);
+	check(!CGPathIsEmpty(path), "a path with three segments says it is empty");
+	check(CGPathContainsPoint(path, NULL, inside, false), "a point inside the triangle is reported outside");
+	check(!CGPathContainsPoint(path, NULL, outside, false), "a point outside is reported inside");
+
+	box = CGPathGetBoundingBox(path);
+	check(box.origin.x == 0 && box.origin.y == 0 && box.size.width == 4 && box.size.height == 4,
+	      "the triangle's box is (%g,%g) %gx%g, want (0,0) 4x4", (double)box.origin.x,
+	      (double)box.origin.y, (double)box.size.width, (double)box.size.height);
+
+	CGPathAddRect(path, NULL, CGRectMake(10, 10, 2, 2));
+	box = CGPathGetBoundingBox(path);
+	check(box.size.width == 12 && box.size.height == 12,
+	      "after adding a rect at (10,10) the box is %gx%g, want 12x12", (double)box.size.width,
+	      (double)box.size.height);
+	return g_fail - before;
+}
+
+/* A FONT FROM BYTES, WHICH IS THE FORM THAT OPENS NO FILE BY NAME: a provider over a real file on this
+ * machine, then the numbers a font must have. THE FILE IS CHECKED FOR FIRST AND ITS ABSENCE IS REPORTED
+ * RATHER THAN COUNTED AS A PASS -- a case that quietly skips is a case that stops covering anything. */
+static int case_font_from_provider(void)
+{
+	int before = g_fail;
+	const char *path = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf";
+	CGDataProviderRef provider;
+	CGFontRef font;
+	CFStringRef name;
+
+	if (access(path, R_OK) != 0) {
+		printf("  (not run: %s is not on this machine, so CGFont's data path was NOT exercised)\n",
+		       path);
+		return g_fail - before;
+	}
+	provider = CGDataProviderCreateWithFilename(path);
+	check(provider != NULL, "a provider could not be made from %s", path);
+	if (provider == NULL) {
+		return g_fail - before;
+	}
+	font = CGFontCreateWithDataProvider(provider);
+	check(font != NULL, "CGFontCreateWithDataProvider refused a real TrueType face");
+	if (font == NULL) {
+		return g_fail - before;
+	}
+	check(CGFontGetNumberOfGlyphs(font) > 0, "the font answers 0 glyphs");
+	check(CGFontGetUnitsPerEm(font) > 0, "the font answers %d units per em",
+	      CGFontGetUnitsPerEm(font));
+	name = CGFontCopyPostScriptName(font);
+	check(name != NULL && CFStringGetLength(name) > 0, "the font has no PostScript name");
+	return g_fail - before;
+}
+
 static int run_in_child(const char *name, int (*fn)(void))
 {
 	pid_t pid;
@@ -310,6 +455,9 @@ static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "A provider made from a CFDataRef gives the bytes back", case_data_provider },
 	{ "A consumer takes bytes and a gradient takes a CFArray of CGColorRef",
 	  case_consumer_and_gradient },
+	{ "A bitmap context whose fill reaches the pixels", case_bitmap_context_fill },
+	{ "A path: empty, contains, and its box", case_path },
+	{ "A font made from bytes", case_font_from_provider },
 };
 
 int main(void)
