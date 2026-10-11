@@ -1118,6 +1118,207 @@ static int case_colour_components(void)
 	return g_fail - before;
 }
 
+/* ------------------------------------------------------------------------ */
+/* images: cropping one, and clipping to a mask                              */
+/* ------------------------------------------------------------------------ */
+
+/* THE CROP'S RECT IS IN IMAGE SPACE AND A SHADING'S IS NOT, WHICH IS THE WHOLE POINT OF MEASURING THIS. A
+ * context's y counts from the bottom; an image's pixels are indexed from the top. The source here is red
+ * with a GREEN square drawn at USER (8,8,8,8), which lands in the image's FIRST EIGHT ROWS -- so cropping
+ * (8,8,8,8) must return the region eight rows DOWN from the top, which is RED, not the green one directly
+ * above it. MEASURED, drawing each crop back at 1:1:
+ *
+ *   crop (8,8,8,8) -> 8x8, drawn cell (4,4) is R=255 (red)
+ *   crop (0,0,8,8) -> 8x8, and it is the green one
+ *
+ * A case that assumed one convention for both would have called one of these a defect. */
+static int case_image_crop(void)
+{
+	int before = g_fail;
+	const size_t side = 16, bpr = side * 4;
+	unsigned char *buf = (unsigned char *)calloc(side, bpr);
+	CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+	CGContextRef src;
+	CGImageRef whole;
+	/* THE FOUR QUADRANTS AND WHAT EACH RECT MUST RETURN. The rects are in the IMAGE's coordinate space,
+	 * which counts y from the TOP; the fills below are in USER space, which counts it from the BOTTOM. */
+	struct { CGRect rect; const char *name; unsigned char blue, green, red; } quads[4] = {
+		{ { 0, 0, 8, 8 }, "(0,0,8,8)", 0, 255, 0 },	 /* top-left: green */
+		{ { 8, 0, 8, 8 }, "(8,0,8,8)", 255, 255, 255 },	 /* top-right: white */
+		{ { 0, 8, 8, 8 }, "(0,8,8,8)", 0, 0, 255 },	 /* bottom-left: red */
+		{ { 8, 8, 8, 8 }, "(8,8,8,8)", 255, 0, 0 },	 /* bottom-right: blue */
+	};
+	size_t i;
+
+	check(buf != NULL && rgb != NULL, "the test could not set up");
+	if (buf == NULL || rgb == NULL) {
+		return g_fail - before;
+	}
+	memset(buf, 0, side * bpr);
+	src = CGBitmapContextCreate(buf, side, side, 8, bpr, rgb,
+				    kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+	check(src != NULL, "the source context was refused");
+	if (src == NULL) {
+		return g_fail - before;
+	}
+	CGContextSetRGBFillColor(src, 1, 0, 0, 1);
+	CGContextFillRect(src, CGRectMake(0, 0, 8, 8));		/* user bottom-left */
+	CGContextSetRGBFillColor(src, 0, 0, 1, 1);
+	CGContextFillRect(src, CGRectMake(8, 0, 8, 8));		/* user bottom-right */
+	CGContextSetRGBFillColor(src, 0, 1, 0, 1);
+	CGContextFillRect(src, CGRectMake(0, 8, 8, 8));		/* user top-left */
+	CGContextSetRGBFillColor(src, 1, 1, 1, 1);
+	CGContextFillRect(src, CGRectMake(8, 8, 8, 8));		/* user top-right */
+	whole = CGBitmapContextCreateImage(src);
+	check(whole != NULL, "the source image could not be made");
+	if (whole == NULL) {
+		return g_fail - before;
+	}
+
+	/* EACH CROP IS READ FROM ITS OWN BYTES, WITH NOTHING DRAWN AND NOTHING SCALED IN BETWEEN. The first
+	 * version of this case drew each crop into a context and sampled a pixel, which puts a scale and a
+	 * y-flip between the crop and the answer -- and it reported the green quadrant as not green while the
+	 * image's own bytes say it is. The bytes are the crop. */
+	for (i = 0; i < 4; i++) {
+		CGImageRef cropped = CGImageCreateWithImageInRect(whole, quads[i].rect);
+		CFDataRef data;
+		const unsigned char *p;
+		size_t rowbytes;
+
+		check(cropped != NULL, "the %s crop was refused", quads[i].name);
+		if (cropped == NULL) {
+			continue;
+		}
+		check(CGImageGetWidth(cropped) == 8 && CGImageGetHeight(cropped) == 8,
+		      "the %s crop is %zux%zu, want 8x8", quads[i].name, CGImageGetWidth(cropped),
+		      CGImageGetHeight(cropped));
+		data = CGDataProviderCopyData(CGImageGetDataProvider(cropped));
+		check(data != NULL, "the %s crop's bytes could not be read", quads[i].name);
+		if (data == NULL) {
+			continue;
+		}
+		p = (const unsigned char *)CFDataGetBytePtr(data);
+		rowbytes = CGImageGetBytesPerRow(cropped);
+		/* B, G, R, A -- the implementation's documented order -- at BOTH CORNERS, which is what makes
+		 * this a crop rather than a sample. */
+		check(p[0] == quads[i].blue && p[1] == quads[i].green && p[2] == quads[i].red,
+		      "the %s crop's (0,0) is B=%u G=%u R=%u, want B=%u G=%u R=%u", quads[i].name, p[0], p[1],
+		      p[2], quads[i].blue, quads[i].green, quads[i].red);
+		check(p[7 * rowbytes + 28] == quads[i].blue && p[7 * rowbytes + 29] == quads[i].green &&
+		      p[7 * rowbytes + 30] == quads[i].red,
+		      "the %s crop's (7,7) is B=%u G=%u R=%u, want B=%u G=%u R=%u", quads[i].name,
+		      p[7 * rowbytes + 28], p[7 * rowbytes + 29], p[7 * rowbytes + 30], quads[i].blue,
+		      quads[i].green, quads[i].red);
+	}
+	return g_fail - before;
+}
+
+/* A CLIP TO A MASK READS THE MASK'S LUMINANCE, AND AN RGB IMAGE IS NOT A MASK AT ALL. Both halves were
+ * measured before they were written, and the second is the door's documented contract rather than an
+ * accident:
+ *
+ *   CG-REFUSE: CGContextClipToMask takes an image mask or a DeviceGray image, and this mask is neither
+ *
+ * MEASURED: a DeviceGray image black on the left half and white on the right, 8 bits per pixel through
+ * CGImageCreate -- a BITMAP CONTEXT CANNOT MAKE ONE, because CGBitmapContextCreate supports only two
+ * B,G,R,A / R,G,B,A combinations and refuses kCGImageAlphaNone -- clips a fill to EXACTLY THE WHITE HALF,
+ * 128 of 256 pixels: white passes and black excludes, which is luminance and not alpha. And an RGB image
+ * passed where a mask belongs is REFUSED, leaving the clip as it was, so the fill covers everything: 256
+ * of 256, which is what a refusal has to look like if it is to be safe. */
+static int case_clip_to_mask(void)
+{
+	int before = g_fail;
+	const size_t side = 16, bpr = side * 4;
+	unsigned char *buf = (unsigned char *)calloc(side, bpr);
+	static unsigned char rows[16 * 16];	/* the mask's own bytes, alive for the whole case */
+	CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+	CGColorSpaceRef gray = CGColorSpaceCreateDeviceGray();
+	CGDataProviderRef provider;
+	CGImageRef mask;
+	CGContextRef ctx;
+	size_t x, y, painted = 0;
+
+	check(buf != NULL && rgb != NULL && gray != NULL, "the test could not set up");
+	if (buf == NULL || rgb == NULL || gray == NULL) {
+		return g_fail - before;
+	}
+	for (y = 0; y < 16; y++) {
+		for (x = 0; x < 16; x++) {
+			rows[y * 16 + x] = (x < 8) ? 0 : 255;	/* black left half, white right */
+		}
+	}
+	provider = CGDataProviderCreateWithData(NULL, rows, sizeof rows, NULL);
+	check(provider != NULL, "the mask's data provider was refused");
+	if (provider == NULL) {
+		return g_fail - before;
+	}
+	mask = CGImageCreate(16, 16, 8, 8, 16, gray, kCGImageAlphaNone, provider, NULL, false,
+			     kCGRenderingIntentDefault);
+	check(mask != NULL, "a DeviceGray image could not be made for the mask");
+	if (mask == NULL) {
+		return g_fail - before;
+	}
+	check(CGImageGetBitsPerPixel(mask) == 8, "the gray mask is %zu bits per pixel, want 8",
+	      CGImageGetBitsPerPixel(mask));
+
+	memset(buf, 0, side * bpr);
+	ctx = CGBitmapContextCreate(buf, side, side, 8, bpr, rgb,
+				    kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+	check(ctx != NULL, "the context for the mask clip was refused");
+	if (ctx == NULL) {
+		return g_fail - before;
+	}
+	CGContextClipToMask(ctx, CGRectMake(0, 0, 16, 16), mask);
+	CGContextSetRGBFillColor(ctx, 0, 0, 1, 1);
+	CGContextFillRect(ctx, CGRectMake(0, 0, 16, 16));
+	{
+		size_t i;
+
+		for (i = 0; i < side * side; i++) {
+			if ((buf[i * 4] | buf[i * 4 + 3]) != 0) {
+				painted++;
+			}
+		}
+	}
+	check(painted == 128, "a half-white gray mask clipped a fill to %zu of 256 pixels, want 128: the "
+			      "rule is luminance", painted);
+	check(!pixel_lit(buf, side, 2, 8), "a pixel over the mask's BLACK half was painted");
+	check(pixel_lit(buf, side, 12, 8), "a pixel over the mask's WHITE half was not painted");
+
+	/* AND THE REFUSAL, WHICH LEAVES THE CLIP AS IT WAS RATHER THAN MAKING ONE UP. */
+	{
+		CGImageRef rgb_mask;
+		CGContextRef other = CGBitmapContextCreate(buf, side, side, 8, bpr, rgb,
+							   kCGImageAlphaPremultipliedFirst |
+								   kCGBitmapByteOrder32Little);
+		size_t i, unclipped = 0;
+
+		memset(buf, 0, side * bpr);
+		CGContextSetRGBFillColor(other, 1, 1, 1, 1);
+		CGContextFillRect(other, CGRectMake(0, 0, 8, 16));
+		rgb_mask = CGBitmapContextCreateImage(other);
+		check(rgb_mask != NULL, "the RGB image for the refusal check could not be made");
+		if (rgb_mask != NULL) {
+			memset(buf, 0, side * bpr);
+			other = CGBitmapContextCreate(buf, side, side, 8, bpr, rgb,
+						      kCGImageAlphaPremultipliedFirst |
+							      kCGBitmapByteOrder32Little);
+			CGContextClipToMask(other, CGRectMake(0, 0, 16, 16), rgb_mask);
+			CGContextSetRGBFillColor(other, 0, 0, 1, 1);
+			CGContextFillRect(other, CGRectMake(0, 0, 16, 16));
+			for (i = 0; i < side * side; i++) {
+				if ((buf[i * 4] | buf[i * 4 + 3]) != 0) {
+					unclipped++;
+				}
+			}
+			check(unclipped == 256,
+			      "an RGB image was accepted as a mask: the fill covered %zu of 256 pixels",
+			      unclipped);
+		}
+	}
+	return g_fail - before;
+}
+
 static int run_in_child(const char *name, int (*fn)(void))
 {
 	pid_t pid;
@@ -1168,6 +1369,8 @@ static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "A clip confines a fill, and clips accumulate", case_clip_confines_a_fill },
 	{ "A stroke is a ring, and the hit test asks about the outline", case_stroke_and_hit_test },
 	{ "The colour component doors", case_colour_components },
+	{ "Cropping an image, and which rows the rect selects", case_image_crop },
+	{ "Clipping to a gray mask, and refusing one that is not", case_clip_to_mask },
 };
 
 int main(void)
