@@ -73,6 +73,14 @@ target_link_libraries(Drawing
         PkgConfig::PIXMAN
         m)
 
+# ---------------------------------------------------------------------------
+# The suite: libagora-drawing's OWN surface. libagora-base's bridges suite tests
+# the two libraries TOGETHER and knows nothing about CoreGraphics' doors, so
+# before this target existed nothing in the tree held this library at all.
+# ---------------------------------------------------------------------------
+enable_testing()
+add_subdirectory(tests)
+
 install(DIRECTORY . DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/CoreGraphics
         FILES_MATCHING PATTERN "*.h")
 install(TARGETS Drawing
