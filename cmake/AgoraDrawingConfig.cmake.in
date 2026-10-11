@@ -1,0 +1,27 @@
+@PACKAGE_INIT@
+
+# Consume Core Graphics (libagora-drawing), Agora's Core Graphics.
+#
+# CORE FOUNDATION IS FOUND FIRST AND NOT OPTIONALLY: every public header here spells its doors with Core
+# Foundation types -- `CFStringRef`, `CFDataRef`, `CFArrayRef`, `CFURLRef` -- so a consumer cannot even
+# preprocess <CoreGraphics/CGColorSpace.h> without Core Foundation's headers beside them.
+#
+# THE REST OF THE LIBRARY'S DEPENDENCIES ARE NOT ITS CONSUMER'S TO FIND, WHICH IS WHY THEY ARE NOT FOUND
+# HERE. pixman, little CMS, libpng, libjpeg and FreeType are linked PRIVATE into a shared library and are
+# recorded in its own NEEDED entries, so a client does not link them, does not see their headers and does
+# not care about their versions. A package that made a client find five encoders to draw a line would be
+# describing its own build rather than its interface.
+#
+# ITS LOADER STILL HAS TO FIND THEM, AND ONE OF THEM IS NOT WHERE IT SHOULD BE: liblcms2 is built in this
+# tree and INSTALLED NOWHERE, so a client that runs against this prefix needs libagora-lcms2/build on its
+# library path as well. The four others are system libraries and are found normally. That is a gap in this
+# tree's build rather than in this package, and it is written down here because a consumer is where it
+# shows.
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(CoreFoundation CONFIG)
+
+include("${CMAKE_CURRENT_LIST_DIR}/AgoraDrawingTargets.cmake")
+
+check_required_components(AgoraDrawing)

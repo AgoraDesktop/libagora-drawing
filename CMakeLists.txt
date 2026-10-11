@@ -63,9 +63,16 @@ target_include_directories(Drawing
         "$<BUILD_INTERFACE:${_agora_include_dir}>"
         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 
+# CORE FOUNDATION IS PUBLIC AND THE ENCODERS ARE NOT, AND THE DIFFERENCE IS MEASURED RATHER THAN STYLISTIC.
+# Every public header here spells its doors with CF types AND a consumer calls Core Foundation itself --
+# CFArrayCreate, CFDataCreate, CFStringRef comparisons -- so a client that links only this target fails to
+# link with "undefined reference to symbol 'CFArrayCreate'" and "libagora-core.so: error adding symbols:
+# DSO missing from command line". pixman, lcms2, libpng, libjpeg and FreeType are reached only from inside
+# the shared library, so they stay PRIVATE and are resolved from its own NEEDED entries.
 target_link_libraries(Drawing
-    PRIVATE
+    PUBLIC
         CoreFoundation::CoreFoundation
+    PRIVATE
         lcms2::lcms2
         PNG::PNG
         JPEG::JPEG
@@ -84,6 +91,37 @@ add_subdirectory(tests)
 install(DIRECTORY . DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/CoreGraphics
         FILES_MATCHING PATTERN "*.h")
 install(TARGETS Drawing
+    EXPORT AgoraDrawingTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+# ---------------------------------------------------------------------------
+# AND IT IS EXPORTED, WHICH IT WAS NOT -- the reason nothing could consume it.
+#
+# The library installed a .so and a directory of headers and NOTHING A CONSUMER COULD find_package, so the
+# only way to use it was to spell the include and link paths out by hand. Every other library in this tree
+# that a consumer already finds has this block; this one did not, and a client that does not exist cannot
+# complain about it.
+#
+# The idiom is libagora-core's, deliberately: same shape, same helpers, same version policy, so a consumer
+# does not have to learn a second one.
+# ---------------------------------------------------------------------------
+include(CMakePackageConfigHelpers)
+
+install(EXPORT AgoraDrawingTargets
+    FILE AgoraDrawingTargets.cmake
+    NAMESPACE AgoraDrawing::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/AgoraDrawing)
+
+configure_package_config_file(cmake/AgoraDrawingConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/AgoraDrawingConfig.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/AgoraDrawing)
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/AgoraDrawingConfigVersion.cmake
+    VERSION 1.0.0
+    COMPATIBILITY SameMajorVersion)
+install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/AgoraDrawingConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/AgoraDrawingConfigVersion.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/AgoraDrawing)
