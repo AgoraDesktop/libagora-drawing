@@ -777,6 +777,33 @@ CGGlyph cg_font_glyph_for_byte(CGFontRef font, unsigned char code, int macroman)
 	return (CGGlyph)index;
 }
 
+/* THE UNICODE STEP, IN A BATCH, BECAUSE THAT IS THE SHAPE CORE TEXT'S DOOR HAS: CTFontGetGlyphsForCharacters
+ * takes an array of UniChars and fills an array of glyphs. ONE CALL PER CHARACTER would be that loop in the
+ * caller, and the loop belongs where the face is.
+ *
+ * THE ANSWERS ARE FREETYPE'S AND THEREFORE APPLE'S: FT_Get_Char_Index answers 0 for a character this face has
+ * no glyph for, and 0 is ALSO `.notdef`'s index -- which is what Apple's own door reports in that slot -- so
+ * the array is filled with 0 where the mapping failed and the RETURN says how many mapped. A caller that
+ * needs Apple's yes-or-no asks whether the return equals the count. */
+int cg_font_glyphs_for_unichars(CGFontRef font, const uint16_t *characters, CGGlyph *glyphs, size_t count)
+{
+	size_t i;
+	int mapped = 0;
+
+	if (font == NULL || font->face == NULL || characters == NULL || glyphs == NULL) {
+		return 0;
+	}
+	for (i = 0; i < count; i++) {
+		FT_UInt index = FT_Get_Char_Index(font->face, (FT_ULong)characters[i]);
+
+		glyphs[i] = (CGGlyph)index;
+		if (index != 0) {
+			mapped++;
+		}
+	}
+	return mapped;
+}
+
 CGGlyph cg_font_glyph_with_name(CGFontRef font, const char *name)
 {
 	FT_UInt index;

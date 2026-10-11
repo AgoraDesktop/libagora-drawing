@@ -67,6 +67,15 @@ CGGlyph cg_font_glyph_with_name(CGFontRef font, const char *name);
  * them. A byte this font has no glyph for answers kCGFontIndexInvalid, which the caller SKIPS
  * rather than drawing .notdef for. */
 CGGlyph cg_font_glyph_for_byte(CGFontRef font, unsigned char code, int macroman);
+/* THE UNICODE STEP, BESIDE THE BYTE ONE, AND IT IS HERE BECAUSE CORE TEXT OWNS THAT STEP AND CANNOT GET IT
+ * FROM THE PUBLIC HEADERS. Apple deprecated Core Graphics' public glyph-mapping doors, so this library struck
+ * them, and the step lives in Core Text instead -- CTFontGetGlyphsForCharacters. THAT DOOR NEEDS THE FACE'S
+ * cmap, AND THE FACE IS HERE, so the mapping is answered here and Core Text keeps its own two dependencies
+ * rather than reaching for a font engine of its own.
+ *
+ * IT IS AN INTERNAL DOOR, WHICH IS WHY ADDING IT DOES NOT REOPEN THE ERA QUESTION THIS LIBRARY ALREADY
+ * SETTLED: what was struck is a DEPRECATED PUBLIC API, not the engine's ability to map a character. */
+int cg_font_glyphs_for_unichars(CGFontRef font, const uint16_t *characters, CGGlyph *glyphs, size_t count);
 
 /* A FONT BY NAME, FROM THE CONFIGURED FONT DIRECTORIES: the door Apple calls
  * `CGFontCreateWithFontName` needs a REGISTRY — a name has to resolve to a file — and this is this

@@ -28,6 +28,9 @@
 #include <CoreGraphics/CGDataConsumer.h>
 #include <CoreGraphics/CGDataProvider.h>
 #include <CoreGraphics/CGFont.h>
+/* THE INTERNAL HEADER, FOR THE ONE DOOR THIS LIBRARY OWES CORE TEXT RATHER THAN ITS OWN CLIENTS: the
+ * Unicode glyph step, whose assertions live here because the face does. */
+#include <CoreGraphics/CGFont_internal.h>
 #include <CoreGraphics/CGFunction.h>
 #include <CoreGraphics/CGGradient.h>
 #include <CoreGraphics/CGImage.h>
@@ -1476,6 +1479,52 @@ static int run_in_child(const char *name, int (*fn)(void))
 	return 1;
 }
 
+/* THE UNICODE GLYPH STEP, WHICH CORE TEXT'S OWN DOOR WILL SIT ON. It is asserted here rather than in the text
+ * repository because the face is here: 'A' and 'a' must map to DIFFERENT non-zero glyphs, an unassigned code
+ * point must map to zero while its neighbours still map, and the return must be the number that mapped. */
+static int case_font_unichar_mapping(void)
+{
+	int before = g_fail;
+	const char *path = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf";
+	CGDataProviderRef provider;
+	CGFontRef font;
+	uint16_t chars[3];
+	CGGlyph glyphs[3];
+	int mapped;
+
+	if (access(path, R_OK) != 0) {
+		printf("  (not run: %s is not on this machine)\n", path);
+		return g_fail - before;
+	}
+	provider = CGDataProviderCreateWithFilename(path);
+	check(provider != NULL, "a provider could not be made from %s", path);
+	if (provider == NULL) {
+		return g_fail - before;
+	}
+	font = CGFontCreateWithDataProvider(provider);
+	check(font != NULL, "the face could not be made");
+	if (font == NULL) {
+		return g_fail - before;
+	}
+
+	chars[0] = (uint16_t)'A';
+	chars[1] = (uint16_t)'a';
+	chars[2] = (uint16_t)0xFFFF;	/* an unassigned code point */
+	mapped = cg_font_glyphs_for_unichars(font, chars, glyphs, 3);
+	check(mapped == 2, "%d of 3 characters mapped, want 2 (0xFFFF is unassigned)", mapped);
+	check(glyphs[0] != 0 && glyphs[1] != 0, "'A' and 'a' did not both map: %u and %u",
+	      (unsigned)glyphs[0], (unsigned)glyphs[1]);
+	check(glyphs[0] != glyphs[1], "'A' and 'a' mapped to the SAME glyph %u", (unsigned)glyphs[0]);
+	check(glyphs[2] == 0, "an unassigned code point mapped to glyph %u, want 0", (unsigned)glyphs[2]);
+
+	/* AND A ZERO COUNT ASKS NOTHING RATHER THAN CRASHING, AS DOES A MISSING FACE. */
+	check(cg_font_glyphs_for_unichars(font, chars, glyphs, 0) == 0,
+	      "a zero-length mapping answered something other than 0");
+	check(cg_font_glyphs_for_unichars(NULL, chars, glyphs, 3) == 0,
+	      "a mapping with no face answered something other than 0");
+	return g_fail - before;
+}
+
 static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "The colour spaces this library answers, by name", case_named_spaces },
 	{ "The type-id table's two promises", case_type_ids },
@@ -1497,6 +1546,7 @@ static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "Cropping an image, and which rows the rect selects", case_image_crop },
 	{ "Clipping to a gray mask, and refusing one that is not", case_clip_to_mask },
 	{ "Where a drawn image lands, at three scales", case_image_draw_placement },
+	{ "The Unicode glyph step Core Text's own door sits on", case_font_unichar_mapping },
 };
 
 int main(void)
