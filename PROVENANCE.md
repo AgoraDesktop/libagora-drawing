@@ -81,3 +81,33 @@ twin in `CGColorSpace.h` and `CGFont.h`, with no signature naming one. They were
 claiming a `.m` file unwrapped `NSValues` that no longer existed.
 
 `README.md` records what is still not done.
+
+**The raw table doors, and why they belong on this side of the seam (2026-10-11).** `cg_font_copy_table` reads one table
+by its four-character tag and `cg_font_table_tags` enumerates the directory. They were added because the Core Text
+library owes a whole FAMILY of answers that are table reads — `fvar`/`avar` for variation, `feat` for features, `post`
+for the underline metrics, `OS/2` and `head` for the traits, and a raw `CTFontCopyTable` — and those doors were owed
+with the reason that NO SEAM DOOR READS A TABLE.
+
+**AND THE IMPLEMENTATION IS ONE CALL, WHICH IS THE ARGUMENT FOR PUTTING IT HERE RATHER THAN THERE**: FreeType holds the
+file's table directory already, so `FT_Load_Sfnt_Table` and `FT_Sfnt_Table_Info` hand back bytes this library has had
+all along. The alternative — Core Text parsing an sfnt itself — would be a SECOND FONT ENGINE in a tree that has one,
+and it would have to reimplement the directory, the tag lookup and the whole-file formats to reach the same bytes.
+
+**BOTH DOORS TAKE A TWO-CALL CONTRACT AND THAT IS NOT AN AFFORDANCE**: a table's size is the table's business, and a
+caller who guesses a buffer size is a caller who truncates silently. ASK WITH `buf == NULL` FOR THE SIZE; ASK AGAIN
+WITH ROOM FOR THE BYTES, AND THE SAME NUMBER COMES BACK. A buffer that is too small is not an error for the same reason
+— the answer still reports how much the table holds. A FACE WITH NO SUCH TABLE, OR NO TABLE DIRECTORY AT ALL, ANSWERS
+0, and the zero-length table that would answer 0 as well is not distinguished: a table with no bytes says what a
+missing one says.
+
+**AND THE DOORS ANSWER THE FILE'S BYTES RATHER THAN AN OPINION ABOUT THEM.** The seam does not parse `head`, does not
+check an `fvar` version and does not interpret a `post` header; the side that knows what those bytes mean is the side
+that asked for them. That keeps the one font engine in the tree from growing a second, partial model of the format.
+
+**AND THE CASE HOLDS THE PART A CALLER GETS WRONG**: the size from the first call and the size from the second must
+AGREE, a real face's `head` table must BEGIN WITH ITS VERSION (0x00010000), the directory must list the tables TrueType
+requires, the two doors must agree about a table's size, and a tag no face carries must answer 0 rather than invent a
+table. The file is checked for first and its absence is REPORTED rather than counted as a pass, which is this suite's
+existing rule.
+
+`README.md` records what is still not done.

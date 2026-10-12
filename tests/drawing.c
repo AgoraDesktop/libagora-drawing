@@ -1525,6 +1525,93 @@ static int case_font_unichar_mapping(void)
 	return g_fail - before;
 }
 
+/* A TABLE TAG FROM ITS FOUR CHARACTERS, so the case below reads as the format does. */
+static uint32_t fn_tag(char a, char b, char c, char d)
+{
+	return ((uint32_t)(unsigned char)a << 24) | ((uint32_t)(unsigned char)b << 16)
+	     | ((uint32_t)(unsigned char)c << 8) | (uint32_t)(unsigned char)d;
+}
+
+/* THE RAW TABLE DOORS. Everything the Core Text side owes about a font's TABLES -- variation axes, features, underline
+ * metrics, the traits that come from `OS/2` and `head` -- waits for these two, and they are the first doors here that
+ * hand back THE FILE'S OWN BYTES rather than an interpretation of them.
+ *
+ * AND THE TWO-CALL CONTRACT IS WHAT THE CASE HOLDS, because it is the part a caller gets wrong: the size from the first
+ * call and the size from the second MUST AGREE, and that agreement is what makes the first call worth having. And the
+ * bytes themselves are checked against the format's own rule -- `head` BEGINS WITH ITS VERSION, 0x00010000 for
+ * TrueType -- so the case is not merely asking whether something came back. */
+static int case_font_tables(void)
+{
+	int before = g_fail;
+	const char *path = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf";
+	CGDataProviderRef provider;
+	CGFontRef font;
+	unsigned char *bytes;
+	uint32_t *tags;
+	const uint32_t head = fn_tag('h', 'e', 'a', 'd');
+	int size, stored, count, i;
+	int has_head = 0, has_cmap = 0;
+	const uint32_t cmap = fn_tag('c', 'm', 'a', 'p');
+
+	if (access(path, R_OK) != 0) {
+		printf("  (not run: %s is not on this machine, so the table doors were NOT exercised)\n", path);
+		return g_fail - before;
+	}
+	provider = CGDataProviderCreateWithFilename(path);
+	font = (provider != NULL) ? CGFontCreateWithDataProvider(provider) : NULL;
+	check(font != NULL, "the face could not be opened, so the table doors cannot be asked");
+	if (font == NULL) {
+		return g_fail - before;
+	}
+
+	/* ONE TABLE, ASKED TWICE: the size first, then the bytes. */
+	size = cg_font_copy_table(font, head, NULL, 0);
+	check(size > 0, "the `head` table of a real face reports %d bytes", size);
+	if (size > 0) {
+		bytes = (unsigned char *)malloc((size_t)size);
+		check(bytes != NULL, "the case could not allocate the %d bytes it was promised", size);
+		if (bytes != NULL) {
+			stored = cg_font_copy_table(font, head, bytes, (size_t)size);
+			check(stored == size,
+			      "the second call answered %d where the first said %d", stored, size);
+			check(bytes[0] == 0x00 && bytes[1] == 0x01 && bytes[2] == 0x00 && bytes[3] == 0x00,
+			      "`head` does not begin with version 1.0, so these are not that table's bytes");
+			free(bytes);
+		}
+	}
+	/* AND A TABLE NOBODY HAS IS NOT INVENTED. */
+	check(cg_font_copy_table(font, fn_tag('z', 'z', 'z', 'z'), NULL, 0) == 0,
+	      "a table no face carries reported a size");
+
+	/* AND THE DIRECTORY LISTS THE TABLES A TRUETYPE FACE IS REQUIRED TO HAVE. */
+	count = cg_font_table_tags(font, NULL, 0);
+	check(count > 0, "the face reports %d tables, and a TrueType face cannot have none", count);
+	if (count > 0) {
+		tags = (uint32_t *)malloc((size_t)count * sizeof(uint32_t));
+		check(tags != NULL, "the case could not allocate %d tags", count);
+		if (tags != NULL) {
+			check(cg_font_table_tags(font, tags, (size_t)count) == count,
+			      "the tag count changed between the two calls");
+			for (i = 0; i < count; i++) {
+				has_head = has_head || (tags[i] == head);
+				has_cmap = has_cmap || (tags[i] == cmap);
+			}
+			check(has_head, "the directory does not list `head`");
+			check(has_cmap, "the directory does not list `cmap`");
+			/* AND A TABLE IN THE DIRECTORY ANSWERS WITH BYTES, WHICH IS THE TWO DOORS AGREEING. */
+			check(cg_font_copy_table(font, head, NULL, 0) == size,
+			      "the table's size is not the size the directory reported");
+			free(tags);
+		}
+	}
+
+	/* NULL SAFETY, in the form these doors can answer it. */
+	check(cg_font_copy_table(NULL, head, NULL, 0) == 0, "a NULL font produced a table");
+	check(cg_font_table_tags(NULL, NULL, 0) == 0, "a NULL font produced a directory");
+	CGFontRelease(font);
+	return g_fail - before;
+}
+
 static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "The colour spaces this library answers, by name", case_named_spaces },
 	{ "The type-id table's two promises", case_type_ids },
@@ -1547,6 +1634,7 @@ static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "Clipping to a gray mask, and refusing one that is not", case_clip_to_mask },
 	{ "Where a drawn image lands, at three scales", case_image_draw_placement },
 	{ "The Unicode glyph step Core Text's own door sits on", case_font_unichar_mapping },
+	{ "The raw table doors, and the two calls agreeing", case_font_tables },
 };
 
 int main(void)

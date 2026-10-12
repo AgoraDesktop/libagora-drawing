@@ -51,6 +51,25 @@ int cg_font_full_name(CGFontRef font, char *buf, size_t size);
  * A face with no such entry answers 0 and writes nothing. */
 int cg_font_name_entry(CGFontRef font, int name_id, char *buf, size_t size);
 
+/* THE RAW BYTES OF ONE TABLE, BY ITS FOUR-CHARACTER TAG -- and this is the door every table-reading answer on the Core
+ * Text side waits for. THE CONTRACT IS TWO CALLS AND IT HAS TO BE, because a table's size is the TABLE'S business: ask
+ * with `buf == NULL` and the answer is the number of bytes the table holds; ask again with a buffer and the answer is
+ * the same number, with as many of those bytes written as fit. A buffer that is TOO SMALL IS NOT AN ERROR for the same
+ * reason -- the answer still says how much the table holds.
+ *
+ * A FACE THAT HAS NO SUCH TABLE, OR IS NOT AN SFNT AT ALL (a bare CFF, a bitmap face), ANSWERS 0. A table of zero
+ * length would answer 0 too, and the distinction is not offered: a zero-length table says nothing, which is what a
+ * missing one says.
+ *
+ * AND IT ANSWERS THE FILE'S OWN BYTES WITH NO INTERPRETATION: the Core Text side decides what a `post` header or an
+ * `fvar` axis record means, and this door is the bytes rather than an opinion about them. */
+int cg_font_copy_table(CGFontRef font, uint32_t tag, unsigned char *buf, size_t size);
+
+/* AND THE TAGS THE FACE CARRIES, IN THE ORDER ITS DIRECTORY LISTS THEM. Same two-call contract: `tags == NULL` answers
+ * how many there are, and a buffer answers with the tags and the same count. A FACE WITHOUT A TABLE DIRECTORY ANSWERS 0
+ * rather than an error, for the same reason the door above does. */
+int cg_font_table_tags(CGFontRef font, uint32_t *tags, size_t capacity);
+
 /* THE GLYPH'S NAME INTO `buf`, same contract, 0 when the face carries no glyph names at all —
  * which is the common case for a subset or a CFF face. */
 int cg_font_glyph_name(CGFontRef font, CGGlyph glyph, char *buf, size_t size);

@@ -30,6 +30,11 @@ been converted back to CF", with lcms2 "not installed on this machine").
   list as owed. `CGColorSpaceNames.c` records the deviation the derived ones carry, and
   `CGGenericCMYKProfile.h` the one that could only come from profile bytes.
 
+- **The RAW TABLE DOORS are the newest, and they exist because Core Text's table-reading answers need the file's
+  bytes**: `cg_font_copy_table` (one table by its four-character tag) and `cg_font_table_tags` (the directory). Both take
+  the two-call contract — size first, bytes second — and both hand back what the file holds rather than an
+  interpretation of it, because the side that knows what a `post` header means is the side that asked.
+
 ### What is not done
 
 - **No umbrella `CoreGraphics.h`**, so Apple's usual `#include <CoreGraphics/CoreGraphics.h>` cannot be

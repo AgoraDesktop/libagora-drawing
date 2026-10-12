@@ -500,6 +500,50 @@ const char *cg_font_postscript_name(CGFontRef font)
 	return FT_Get_Postscript_Name(font->face);
 }
 
+/* THE RAW TABLE DOORS -- SEE CGFont_internal.h FOR THE TWO-CALL CONTRACT AND WHAT THEY ARE FOR.
+ *
+ * AND `FT_Load_Sfnt_Table` IS THE WHOLE IMPLEMENTATION, WHICH IS THE POINT OF PUTTING THEM HERE RATHER THAN IN CORE
+ * TEXT: FreeType already holds the file's table directory, so the seam hands back bytes it has had all along, and the
+ * alternative -- Core Text parsing an sfnt itself -- would be a second font engine in a tree that has one.
+ *
+ * `HEAD` AND FRIENDS ARE NOT PARSED HERE. The door is the file's bytes, and its callers are the doors that know what
+ * the bytes mean. */
+int cg_font_copy_table(CGFontRef font, uint32_t tag, unsigned char *buf, size_t size)
+{
+	/* `length` IS IN AND OUT: in, the room the caller gave; out, the table's true size whether or not it fit. */
+	FT_ULong length = (buf != NULL) ? (FT_ULong)size : 0;
+
+	if (font == NULL || font->face == NULL) {
+		return 0;
+	}
+	if (FT_Load_Sfnt_Table(font->face, (FT_ULong)tag, 0, buf, &length) != 0) {
+		return 0;
+	}
+	return (int)length;
+}
+
+int cg_font_table_tags(CGFontRef font, uint32_t *tags, size_t capacity)
+{
+	FT_ULong tag = 0;
+	FT_ULong length = 0;
+	FT_UInt index = 0;
+	size_t count = 0;
+
+	if (font == NULL || font->face == NULL) {
+		return 0;
+	}
+	/* THE ENUMERATION ENDS WHEN THE DIRECTORY DOES: FreeType reports Table_Missing once the index is past the last
+	 * entry, which is the only way this call says "no more". */
+	while (FT_Sfnt_Table_Info(font->face, index, &tag, &length) == 0) {
+		if (tags != NULL && count < capacity) {
+			tags[count] = (uint32_t)tag;
+		}
+		count++;
+		index++;
+	}
+	return (int)count;
+}
+
 /* UTF-16BE (the Windows name table) INTO UTF-8, IN CALLER MEMORY. Surrogate pairs are handled
  * because a full name is allowed to contain anything; a lone surrogate is skipped rather than
  * encoded, which is the same choice every UTF-16 decoder in this tree makes (see NSString.m). */
