@@ -977,14 +977,31 @@ int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size, CGAf
 #include <dirent.h>
 #include <strings.h>
 
-/* THE FSH DIRECTORIES A FONT MAY LIVE IN, in the order they are searched: the shared fonts this tree
- * stages, then the two system locations a Mac-shaped filesystem would use, then the flat one. */
+/* **THE FONT DIRECTORIES, AND THE MAC'S ARE NOT ENOUGH — WHICH WAS MEASURED THE HARD WAY.** This list was four
+ * Mac-shaped paths, and on Linux NOT ONE OF THEM EXISTS, so the registry enumerated nothing, every face lookup
+ * answered NULL, every string measured zero, and a menu was a column of empty rows three layers above the cause.
+ * The Mac's paths stay, because this tree does run there; the Linux and FreeBSD ones are added, because that is
+ * what Agora is for. THE TWO LAYOUTS DIFFER and the walk below is what reconciles them. */
 static const char *fn_font_dirs[] = {
+	/* This tree's own staging, the two a Mac-shaped filesystem uses, then the flat one. */
 	"/System/Shared/Fonts",
 	"/System/Library/Fonts",
 	"/Library/Fonts",
-	"/System/Fonts"
+	"/System/Fonts",
+	/* Linux: the distribution's own, then the local administrator's. */
+	"/usr/share/fonts",
+	"/usr/local/share/fonts",
+	/* FreeBSD, and the X11 tree it also keeps faces in. */
+	"/usr/local/lib/X11/fonts",
+	"/usr/X11R6/lib/X11/fonts",
 };
+
+/* **HOW DEEP THE WALK GOES, AND WHY IT MUST WALK AT ALL.** The Mac flattens its faces into the directories above,
+ * so one listing is enough there. LINUX DOES NOT: `/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf` is TWO levels
+ * below the root, and the level in between is a FORMAT directory — so a one-level listing finds `truetype`, which
+ * is not a font, and nothing else. The depth is bounded rather than unlimited so that a symlink loop is a short
+ * walk instead of a hang. */
+#define FN_FONT_MAX_DEPTH 4
 
 static int fn_has_font_suffix(const char *name)
 {
@@ -1045,10 +1062,43 @@ static CGFontRef fn_try_file(const char *path, const char *name)
 	return font;
 }
 
+/* The name door's descent. IT RETURNS THE FIRST FACE THAT ANSWERS rather than visiting every file, which is the
+ * whole of how it differs from the enumeration below — and why the two are separate walks rather than one walk
+ * with a flag. */
+static CGFontRef fn_create_name_in_directory(const char *directory, const char *name, int depth)
+{
+	DIR *d = opendir(directory);
+	struct dirent *e;
+	CGFontRef result = NULL;
+
+	if (d == NULL) {
+		return NULL;		/* a file, or an unreadable directory: nothing to descend into */
+	}
+	while (result == NULL && (e = readdir(d)) != NULL) {
+		char path[1024];
+
+		if (e->d_name[0] == '.') {
+			continue;	/* `.`, `..`, and anything hidden */
+		}
+		if (snprintf(path, sizeof path, "%s/%s", directory, e->d_name) >= (int)sizeof path) {
+			continue;
+		}
+		if (fn_has_font_suffix(e->d_name)) {
+			result = fn_try_file(path, name);
+			continue;
+		}
+		if (depth > 0) {
+			result = fn_create_name_in_directory(path, name, depth - 1);
+		}
+	}
+	closedir(d);
+	return result;
+}
+
 CGFontRef cg_font_create_with_name(const char *name)
 {
 	char override_buf[1024];
-	const char *dirs[8];
+	const char *dirs[16];
 	int ndirs = 0;
 	int i;
 
@@ -1077,7 +1127,7 @@ CGFontRef cg_font_create_with_name(const char *name)
 
 			strcpy(override_buf, env);
 			p = strtok(override_buf, ":");
-			while (p != NULL && ndirs < 8) {
+			while (p != NULL && ndirs < 16) {
 				dirs[ndirs++] = p;
 				p = strtok(NULL, ":");
 			}
@@ -1100,32 +1150,14 @@ CGFontRef cg_font_create_with_name(const char *name)
 		}
 	}
 	for (i = 0; i < ndirs; i++) {
-		DIR *d = opendir(dirs[i]);
-		struct dirent *e;
+		CGFontRef font = fn_create_name_in_directory(dirs[i], name, FN_FONT_MAX_DEPTH);
 
-		if (d == NULL) {
-			continue;
+		if (font != NULL) {
+			/* THE CACHE TAKES A REFERENCE OF ITS OWN AND THE CALLER STILL GETS ITS +1: this door Creates, and a
+			 * font that came from the cache is no exception to that. */
+			fn_name_cache_put(name, font);
+			return font;
 		}
-		while ((e = readdir(d)) != NULL) {
-			char path[1024];
-			CGFontRef font;
-
-			if (!fn_has_font_suffix(e->d_name)) {
-				continue;
-			}
-			if (snprintf(path, sizeof path, "%s/%s", dirs[i], e->d_name) >= (int)sizeof path) {
-				continue;
-			}
-			font = fn_try_file(path, name);
-			if (font != NULL) {
-				closedir(d);
-				/* THE CACHE TAKES A REFERENCE OF ITS OWN AND THE CALLER STILL GETS ITS +1: this
-				 * door Creates, and a font that came from the cache is no exception to that. */
-				fn_name_cache_put(name, font);
-				return font;
-			}
-		}
-		closedir(d);
 	}
 	return NULL;
 }
@@ -1139,9 +1171,38 @@ CGFontRef cg_font_create_with_name(const char *name)
  * must visit every file, so the two loops share their INPUT (which directories, and the override) and nothing
  * else. What they must not share is a second copy of the directory LIST, and they do not — `fn_font_dirs` is
  * read here exactly as it is there. */
+/* The enumerator's descent: EVERY face under a directory, which is the other half of the pair above. */
+static void fn_enumerate_directory(const char *directory, cg_font_visit visit, void *info, int depth)
+{
+	DIR *d = opendir(directory);
+	struct dirent *e;
+
+	if (d == NULL) {
+		return;
+	}
+	while ((e = readdir(d)) != NULL) {
+		char path[1024];
+
+		if (e->d_name[0] == '.') {
+			continue;
+		}
+		if (snprintf(path, sizeof path, "%s/%s", directory, e->d_name) >= (int)sizeof path) {
+			continue;
+		}
+		if (fn_has_font_suffix(e->d_name)) {
+			visit(info, path);
+			continue;
+		}
+		if (depth > 0) {
+			fn_enumerate_directory(path, visit, info, depth - 1);
+		}
+	}
+	closedir(d);
+}
+
 void cg_font_enumerate(cg_font_visit visit, void *info)
 {
-	const char *dirs[8];
+	const char *dirs[16];
 	char override_buf[1024];
 	int ndirs = 0;
 	size_t i;
@@ -1157,7 +1218,7 @@ void cg_font_enumerate(cg_font_visit visit, void *info)
 
 			strcpy(override_buf, env);
 			p = strtok(override_buf, ":");
-			while (p != NULL && ndirs < 8) {
+			while (p != NULL && ndirs < 16) {
 				dirs[ndirs++] = p;
 				p = strtok(NULL, ":");
 			}
@@ -1169,24 +1230,7 @@ void cg_font_enumerate(cg_font_visit visit, void *info)
 		}
 	}
 	for (i = 0; i < (size_t)ndirs; i++) {
-		DIR *d = opendir(dirs[i]);
-		struct dirent *e;
-
-		if (d == NULL) {
-			continue;
-		}
-		while ((e = readdir(d)) != NULL) {
-			char path[1024];
-
-			if (!fn_has_font_suffix(e->d_name)) {
-				continue;
-			}
-			if (snprintf(path, sizeof path, "%s/%s", dirs[i], e->d_name) >= (int)sizeof path) {
-				continue;
-			}
-			visit(info, path);
-		}
-		closedir(d);
+		fn_enumerate_directory(dirs[i], visit, info, FN_FONT_MAX_DEPTH);
 	}
 	/* **AND THE REGISTERED PATHS LAST, which is the other half of "one question, several inputs"**: a caller
 	 * asking what fonts exist is asking about the registry too, and CT-M7a's proof — that the URL, family and
