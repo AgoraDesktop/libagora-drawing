@@ -1062,20 +1062,53 @@ static CGFontRef fn_try_file(const char *path, const char *name)
 	return font;
 }
 
-/* The name door's descent. IT RETURNS THE FIRST FACE THAT ANSWERS rather than visiting every file, which is the
- * whole of how it differs from the enumeration below — and why the two are separate walks rather than one walk
- * with a flag. */
+/* **THE RANK OF A MATCH, BECAUSE THE FIRST FACE THAT ANSWERS IS NOT THE BEST ONE.** MEASURED: asking for the
+ * FAMILY `DejaVu Sans` answered `DejaVuSans-Bold`. Both files carry that family, so both match, and the walk
+ * stopped at whichever the directory listed first — and `-` SORTS BEFORE `.`, so `DejaVuSans-Bold.ttf` is first
+ * EVERY time and the bold face won EVERY time. An exact full-name match beats a family match, and a REGULAR face
+ * beats a styled one; that is enough to pick the plain face of a family WITHOUT THIS CODE KNOWING ANY FOUNDRY'S
+ * NAMING CONVENTIONS, which is the only kind of rule that belongs down here. */
+static int fn_match_rank(CGFontRef font, const char *name)
+{
+	static const char *const style_words[] = { "bold", "italic", "oblique" };
+	char full[256];
+	size_t i;
+
+	if (cg_font_full_name(font, full, (int)sizeof full) <= 0) {
+		return 2;		/* it answers to the name and says nothing about a style: take it */
+	}
+	if (strcasecmp(full, name) == 0) {
+		return 3;		/* the full name ITSELF was asked for */
+	}
+	for (i = 0; i < sizeof style_words / sizeof style_words[0]; i++) {
+		const char *word = style_words[i];
+		const char *p;
+
+		for (p = full; *p != '\0'; p++) {
+			if (strncasecmp(p, word, strlen(word)) == 0) {
+				return 1;	/* a styled face of the family, which is only ever a fallback */
+			}
+		}
+	}
+	return 2;
+}
+
+/* The name door's descent. **IT KEEPS THE BEST MATCH RATHER THAN THE FIRST**, which is the whole of how it
+ * differs from the enumeration below — and why the two are separate walks rather than one walk with a flag. */
 static CGFontRef fn_create_name_in_directory(const char *directory, const char *name, int depth)
 {
 	DIR *d = opendir(directory);
 	struct dirent *e;
-	CGFontRef result = NULL;
+	CGFontRef best = NULL;
+	int best_rank = 0;
 
 	if (d == NULL) {
 		return NULL;		/* a file, or an unreadable directory: nothing to descend into */
 	}
-	while (result == NULL && (e = readdir(d)) != NULL) {
+	while ((e = readdir(d)) != NULL) {
 		char path[1024];
+		CGFontRef found = NULL;
+		int rank;
 
 		if (e->d_name[0] == '.') {
 			continue;	/* `.`, `..`, and anything hidden */
@@ -1084,21 +1117,33 @@ static CGFontRef fn_create_name_in_directory(const char *directory, const char *
 			continue;
 		}
 		if (fn_has_font_suffix(e->d_name)) {
-			result = fn_try_file(path, name);
+			found = fn_try_file(path, name);
+		} else if (depth > 0) {
+			found = fn_create_name_in_directory(path, name, depth - 1);
+		}
+		if (found == NULL) {
 			continue;
 		}
-		if (depth > 0) {
-			result = fn_create_name_in_directory(path, name, depth - 1);
+		rank = fn_match_rank(found, name);
+		if (rank > best_rank) {
+			best_rank = rank;
+			if (best != NULL) {
+				CGFontRelease(best);
+			}
+			best = found;
+		} else {
+			CGFontRelease(found);
 		}
 	}
 	closedir(d);
-	return result;
+	return best;
 }
 
 CGFontRef cg_font_create_with_name(const char *name)
 {
 	char override_buf[1024];
 	const char *dirs[16];
+	CGFontRef best = NULL;
 	int ndirs = 0;
 	int i;
 
@@ -1149,17 +1194,32 @@ CGFontRef cg_font_create_with_name(const char *name)
 			dirs[ndirs++] = fn_font_dirs[i];
 		}
 	}
+	/* **AND THE BEST MATCH IS KEPT ACROSS DIRECTORIES TOO**, not just within one: a styled face found early must
+	 * not end the search when a plain one is sitting in the next directory along. */
 	for (i = 0; i < ndirs; i++) {
 		CGFontRef font = fn_create_name_in_directory(dirs[i], name, FN_FONT_MAX_DEPTH);
 
-		if (font != NULL) {
-			/* THE CACHE TAKES A REFERENCE OF ITS OWN AND THE CALLER STILL GETS ITS +1: this door Creates, and a
-			 * font that came from the cache is no exception to that. */
-			fn_name_cache_put(name, font);
-			return font;
+		if (font == NULL) {
+			continue;
+		}
+		if (best == NULL || fn_match_rank(font, name) > fn_match_rank(best, name)) {
+			if (best != NULL) {
+				CGFontRelease(best);
+			}
+			best = font;
+		} else {
+			CGFontRelease(font);
+		}
+		if (fn_match_rank(best, name) >= 3) {
+			break;		/* the full name itself was asked for; nothing can beat that */
 		}
 	}
-	return NULL;
+	if (best != NULL) {
+		/* THE CACHE TAKES A REFERENCE OF ITS OWN AND THE CALLER STILL GETS ITS +1: this door Creates, and a font
+		 * that came from the cache is no exception to that. */
+		fn_name_cache_put(name, best);
+	}
+	return best;
 }
 
 /* ------------------------------------------------------------------------- */
