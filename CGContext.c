@@ -4330,6 +4330,13 @@ void CGContextDrawImage(CGContextRef c, CGRect rect, CGImageRef image)
 	int copy;			/* the blend mode, read once: Copy replaces, Normal blends */
 	int left, right, top, bottom;
 	int x, y;
+	/* **WHERE RED AND BLUE LIVE IN THE DESTINATION, WHICH THIS HAND LOOP HAS TO ASK FOR.** This sampler
+	 * composites by hand rather than through pixman, so it is the ONE writer that has to know the surface's
+	 * byte order — and this tree makes two: a window's surface is `PremultipliedFirst | ByteOrder32Little`
+	 * (pixman `a8r8g8b8`, memory B,G,R,A) and a bitmap rep's is `PremultipliedLast | ByteOrder32Big` (pixman
+	 * `a8b8g8r8`, memory R,G,B,A). Writing blue to `d[0]` either way is what made an image drawn into a REP
+	 * come out with its red and blue swapped, while the same image on a window was right. */
+	unsigned red_offset, blue_offset;
 	CGImageRef mask_image;
 	const CGFloat *mask_colors;
 	int mask_count = 0;
@@ -4395,6 +4402,12 @@ void CGContextDrawImage(CGContextRef c, CGRect rect, CGImageRef image)
 	alpha = c->state.alpha;
 	/* READ ONCE, LIKE EVERYTHING ELSE THIS LOOP LIFTS OUT OF ITS PER-PIXEL BODY. */
 	copy = (c->state.blend == kCGBlendModeCopy);
+	{
+		uint32_t dest = (uint32_t)cg_context_format(c->bitmap_info);
+
+		red_offset = (dest == PIXMAN_a8r8g8b8) ? 2u : 0u;
+		blue_offset = (dest == PIXMAN_a8r8g8b8) ? 0u : 2u;
+	}
 
 	for (y = top; y < bottom; y++) {
 		for (x = left; x < right; x++) {
@@ -4486,14 +4499,14 @@ void CGContextDrawImage(CGContextRef c, CGRect rect, CGImageRef image)
 				}
 				if (copy) {
 					/* THE SOURCE REPLACES THE DESTINATION, masks and all: no destination term. */
-					d[0] = (unsigned char)(mix[0] * 255.0 * sa);
+					d[red_offset] = (unsigned char)(mix[2] * 255.0 * sa);
 					d[1] = (unsigned char)(mix[1] * 255.0 * sa);
-					d[2] = (unsigned char)(mix[2] * 255.0 * sa);
+					d[blue_offset] = (unsigned char)(mix[0] * 255.0 * sa);
 					d[3] = (unsigned char)(255.0 * sa);
 				} else {
-					d[0] = (unsigned char)(mix[0] * 255.0 * sa + (double)d[0] * (1.0 - sa));
+					d[red_offset] = (unsigned char)(mix[2] * 255.0 * sa + (double)d[red_offset] * (1.0 - sa));
 					d[1] = (unsigned char)(mix[1] * 255.0 * sa + (double)d[1] * (1.0 - sa));
-					d[2] = (unsigned char)(mix[2] * 255.0 * sa + (double)d[2] * (1.0 - sa));
+					d[blue_offset] = (unsigned char)(mix[0] * 255.0 * sa + (double)d[blue_offset] * (1.0 - sa));
 					d[3] = (unsigned char)((double)d[3] * (1.0 - sa) + 255.0 * sa);
 				}
 				continue;
@@ -4563,14 +4576,14 @@ void CGContextDrawImage(CGContextRef c, CGRect rect, CGImageRef image)
 				sa = sa * cg_image_mask_coverage(mask_image, mask_decode, u, v);
 			}
 			if (copy) {
-				d[0] = (unsigned char)(sb * sa);
+				d[red_offset] = (unsigned char)(sr * sa);
 				d[1] = (unsigned char)(sg * sa);
-				d[2] = (unsigned char)(sr * sa);
+				d[blue_offset] = (unsigned char)(sb * sa);
 				d[3] = (unsigned char)(255.0 * sa);
 			} else {
-				d[0] = (unsigned char)(sb * sa + (double)d[0] * (1.0 - sa));
+				d[red_offset] = (unsigned char)(sr * sa + (double)d[red_offset] * (1.0 - sa));
 				d[1] = (unsigned char)(sg * sa + (double)d[1] * (1.0 - sa));
-				d[2] = (unsigned char)(sr * sa + (double)d[2] * (1.0 - sa));
+				d[blue_offset] = (unsigned char)(sb * sa + (double)d[blue_offset] * (1.0 - sa));
 				d[3] = (unsigned char)((double)d[3] * (1.0 - sa) + 255.0 * sa);
 			}
 		}
