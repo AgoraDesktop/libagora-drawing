@@ -44,6 +44,14 @@ been converted back to CF", with lcms2 "not installed on this machine").
   1223 fringed pixels into an opaque destination, **zero** into an alpha one, the same ink to 0.07%, and the
   fringe on the correct side of the stroke — red on the left of black-on-white ink, blue on the right.
 
+- **AND THE FONT'S PAIR ADJUSTMENTS REACH THE LAYOUT: KERNING, FROM WHICHEVER TABLE THE FACE KEEPS IT IN.**
+  `cg_font_kern` asks the engine for the old `kern` table and falls back to a reader of this library's own for
+  **GPOS** — because THE FACE THIS DESKTOP DRAWS WITH HAS NO `kern` TABLE AT ALL, so before this every pair it
+  carries was invisible and the text was set unkerned: MEASURED, `To` sat 1.02 pixels too far apart at 13 points,
+  which is the amount Pango (HarfBuzz) closes the same pair by. `CGGPosKern.c` reads one feature — `kern` — and the
+  two PairPos subtable formats, extension lookups included; ligatures, marks and contextual positioning are
+  HarfBuzz's and are stated as absent. The table is read once per font and kept, and every read is bounds-checked.
+
 ### What is not done
 
 - **No umbrella `CoreGraphics.h`**, so Apple's usual `#include <CoreGraphics/CoreGraphics.h>` cannot be
