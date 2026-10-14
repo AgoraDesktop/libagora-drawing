@@ -393,6 +393,8 @@ CGContextRef CGBitmapContextCreate(void *data, size_t width, size_t height, size
  * little-endian with the alpha last is A, B, G, R in memory, and pixman has no such order. REFUSING IS THE
  * POINT — a context whose bytes mean something other than what the caller asked for would corrupt whatever
  * it touched, which is this file's oldest rule. */
+static void cg_channel_slots(uint32_t bitmap_info, int slot[3]);
+
 static pixman_format_code_t cg_context_format(uint32_t bitmap_info)
 {
 	uint32_t alpha = bitmap_info & kCGBitmapAlphaInfoMask;
@@ -415,6 +417,29 @@ static pixman_format_code_t cg_context_format(uint32_t bitmap_info)
 		return PIXMAN_x8b8g8r8;		/* memory R, G, B, X */
 	}
 	return (pixman_format_code_t)0;
+}
+
+/* **WHERE RED, GREEN AND BLUE SIT IN A DESTINATION'S MEMORY, DECIDED IN ONE PLACE AND ASKED EVERYWHERE.**
+ * The two orders this library answers are `kCGBitmapByteOrder32Little` with a component FIRST — memory
+ * B, G, R, X/A — and `kCGBitmapByteOrder32Big` with one LAST — memory R, G, B, X/A. THE POSITION OF THE ALPHA
+ * (OR OF THE SKIPPED COMPONENT) IS WHAT DECIDES THE COLOUR ORDER, and the OPAQUE spelling of a layout keeps
+ * that layout's order: `NoneSkipFirst` is B, G, R as surely as `PremultipliedFirst` is.
+ *
+ * **AND THAT IS A CORRECTION, WITH A MEASUREMENT BEHIND IT.** This decision used to be spelled out at each
+ * writer as "`PremultipliedLast` means R, G, B, everything else means B, G, R" — which was true while those were
+ * the only two formats a context could be made in. The moment the OPAQUE spelling of each was answered, two of
+ * those writers were wrong about `NoneSkipLast` (R, G, B, called B, G, R) and the third asked pixman instead —
+ * `dest == PIXMAN_a8r8g8b8`, which the window's `NoneSkipFirst` surface is NOT, so MEASURED the window chrome's
+ * close button came out (86, 80, 242): the theme's `#F25056` with red and blue swapped. */
+static void cg_channel_slots(uint32_t bitmap_info, int slot[3])
+{
+	uint32_t alpha = bitmap_info & kCGBitmapAlphaInfoMask;
+	int last = (alpha == kCGImageAlphaPremultipliedLast || alpha == kCGImageAlphaLast
+		    || alpha == kCGImageAlphaNoneSkipLast);
+
+	slot[0] = last ? 0 : 2;		/* red */
+	slot[1] = 1;			/* green */
+	slot[2] = last ? 2 : 0;		/* blue */
 }
 
 CGContextRef CGBitmapContextCreateWithData(void *data, size_t width, size_t height,
@@ -2834,10 +2859,14 @@ static void cg_composite_plus_darker(CGContextRef c, pixman_image_t *src, pixman
 	int mstride = mask != NULL ? pixman_image_get_stride(mask) : 0;
 	/* AND WHERE RED SITS IN THE DESTINATION, which is the CONTEXT's order and not the source's: the
 	 * sources this path is handed are pixman images this tree made as a8r8g8b8 (B,G,R,A) and stay that
-	 * way. The destination is the caller's buffer, and it now has two possible orders. */
-	const int ro = (c->bitmap_info & kCGBitmapAlphaInfoMask) == kCGImageAlphaPremultipliedLast ? 0 : 2;
+	 * way. The destination is the caller's buffer, and `cg_channel_slots` is where its order is decided. */
+	int slots[3];
+	int ro;
 	int x;
 	int y;
+
+	cg_channel_slots(c->bitmap_info, slots);
+	ro = slots[0];
 
 	if (sbits == NULL) {
 		fprintf(stderr, "CG-REFUSE: plus-darker needs a readable source and this one is a solid "
@@ -4384,11 +4413,10 @@ void CGContextDrawImage(CGContextRef c, CGRect rect, CGImageRef image)
 	int left, right, top, bottom;
 	int x, y;
 	/* **WHERE RED AND BLUE LIVE IN THE DESTINATION, WHICH THIS HAND LOOP HAS TO ASK FOR.** This sampler
-	 * composites by hand rather than through pixman, so it is the ONE writer that has to know the surface's
-	 * byte order — and this tree makes two: a window's surface is `PremultipliedFirst | ByteOrder32Little`
-	 * (pixman `a8r8g8b8`, memory B,G,R,A) and a bitmap rep's is `PremultipliedLast | ByteOrder32Big` (pixman
-	 * `a8b8g8r8`, memory R,G,B,A). Writing blue to `d[0]` either way is what made an image drawn into a REP
-	 * come out with its red and blue swapped, while the same image on a window was right. */
+	 * composites by hand rather than through pixman, so it is the ONE writer that has to know the surface's byte
+	 * order — and it asks `cg_channel_slots`, which is the one place that says. It used to ask PIXMAN instead,
+	 * comparing the destination's format to `a8r8g8b8`; the window's surface is `x8r8g8b8`, so the comparison
+	 * failed and every image drawn onto a window had its red and blue swapped. */
 	unsigned red_offset, blue_offset;
 	CGImageRef mask_image;
 	const CGFloat *mask_colors;
@@ -4456,10 +4484,11 @@ void CGContextDrawImage(CGContextRef c, CGRect rect, CGImageRef image)
 	/* READ ONCE, LIKE EVERYTHING ELSE THIS LOOP LIFTS OUT OF ITS PER-PIXEL BODY. */
 	copy = (c->state.blend == kCGBlendModeCopy);
 	{
-		uint32_t dest = (uint32_t)cg_context_format(c->bitmap_info);
+		int slot[3];
 
-		red_offset = (dest == PIXMAN_a8r8g8b8) ? 2u : 0u;
-		blue_offset = (dest == PIXMAN_a8r8g8b8) ? 0u : 2u;
+		cg_channel_slots(c->bitmap_info, slot);
+		red_offset = (unsigned)slot[0];
+		blue_offset = (unsigned)slot[2];
 	}
 
 	for (y = top; y < bottom; y++) {
@@ -5045,14 +5074,14 @@ static int cg_font_smoothing(CGContextRef c)
 static void cg_composite_glyph_smoothed(CGContextRef c, const unsigned char *bitmap, int nsamples,
 					int rows, int left, int dx, int dy)
 {
-	const int ro = (c->bitmap_info & kCGBitmapAlphaInfoMask) == kCGImageAlphaPremultipliedLast ? 0 : 2;
-	const int slot[3] = { ro, 1, 2 - ro };
+	int slot[3];
 	double a = c->state.rgba[3] * c->state.alpha;
 	double colour[3];
 	const unsigned char *mbits = NULL;
 	int mstride = 0, mw = 0, mh = 0;
 	int row, sample;
 
+	cg_channel_slots(c->bitmap_info, slot);
 	colour[0] = c->state.rgba[0];
 	colour[1] = c->state.rgba[1];
 	colour[2] = c->state.rgba[2];

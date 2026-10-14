@@ -2068,6 +2068,88 @@ static int case_subpixel_positioning(void)
 	return g_fail - before;
 }
 
+
+/* ============================================================================================ *
+ * WHERE THE CHANNELS LAND, ASKED OF ALL FOUR DESTINATIONS.                                       *
+ *                                                                                                *
+ * **THIS CASE EXISTS BECAUSE ONE OF THEM WAS WRONG AND NOTHING ASKED.** Four formats are answered  *
+ * — each of this library's two memory layouts in an alpha and an OPAQUE spelling — and the order   *
+ * of the channels is a property of the LAYOUT, not of whether the fourth byte is an alpha:          *
+ * `NoneSkipFirst` is B, G, R, X exactly as `PremultipliedFirst` is. Every writer used to work that  *
+ * out for itself, and when the opaque spellings were added one of them asked pixman (`dest ==       *
+ * a8r8g8b8`, which an `x8r8g8b8` surface is not) and two spelled it as "PremultipliedLast means      *
+ * R, G, B" — so an image drawn onto a WINDOW came out with its red and blue swapped: MEASURED, the  *
+ * menu bar's close button read (86, 80, 242) where the theme's `#F25056` is (242, 80, 86).           *
+ *                                                                                                *
+ * THE EXPECTED BYTES ARE WRITTEN FROM THE TWO LAYOUTS AND NOT FROM THE CODE, which is the only way  *
+ * a test of this says anything: a component FIRST in a little-endian word is B, G, R, X in memory,  *
+ * and a component LAST in a big-endian word is R, G, B, X.                                          *
+ * ============================================================================================ */
+static int case_destination_channel_order(void)
+{
+	int before = g_fail;
+	CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+	CGContextRef src;
+	CGImageRef image;
+	unsigned char *src_px = (unsigned char *)calloc(4u, 4u);
+	struct { uint32_t info; const char *name; int red_at; int blue_at; } formats[] = {
+		{ kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little, "premultiplied first, 32 little", 2, 0 },
+		{ kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little, "no alpha, skip first, 32 little", 2, 0 },
+		{ kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big, "premultiplied last, 32 big", 0, 2 },
+		{ kCGImageAlphaNoneSkipLast | kCGBitmapByteOrder32Big, "no alpha, skip last, 32 big", 0, 2 },
+	};
+	size_t f;
+
+	check(src_px != NULL && rgb != NULL, "the test could not allocate its buffer or space");
+	if (src_px == NULL || rgb == NULL) {
+		return g_fail - before;
+	}
+	/* A SOURCE WHOSE THREE CHANNELS ARE ALL DIFFERENT, so a swap cannot hide: 230, 102, 51. */
+	memset(src_px, 0, 16u);
+	src = CGBitmapContextCreate(src_px, 1, 1, 8, 4, rgb,
+				    kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+	check(src != NULL, "the source context could not be made");
+	if (src == NULL) {
+		free(src_px);
+		return g_fail - before;
+	}
+	CGContextSetRGBFillColor(src, 0.9, 0.4, 0.2, 1.0);
+	CGContextFillRect(src, CGRectMake(0.0, 0.0, 1.0, 1.0));
+	image = CGBitmapContextCreateImage(src);
+	check(image != NULL, "the source image could not be made");
+	if (image == NULL) {
+		CGContextRelease(src);
+		free(src_px);
+		return g_fail - before;
+	}
+
+	for (f = 0; f < sizeof formats / sizeof formats[0]; f++) {
+		unsigned char *px = (unsigned char *)calloc(4u, 4u);
+		CGContextRef dst = (px != NULL) ? CGBitmapContextCreate(px, 1, 1, 8, 4, rgb, formats[f].info) : NULL;
+
+		check(dst != NULL, "%s was refused", formats[f].name);
+		if (dst == NULL) {
+			free(px);
+			continue;
+		}
+		CGContextDrawImage(dst, CGRectMake(0.0, 0.0, 1.0, 1.0), image);
+		printf("  (%s: bytes %3d %3d %3d %3d — red at %d, blue at %d)\n", formats[f].name, px[0], px[1],
+		       px[2], px[3], formats[f].red_at, formats[f].blue_at);
+		check(px[formats[f].red_at] > 200 && px[formats[f].red_at] < 245,
+		      "%s put %d where RED belongs, want about 230", formats[f].name, px[formats[f].red_at]);
+		check(px[1] > 80 && px[1] < 125, "%s put %d where GREEN belongs, want about 102",
+		      formats[f].name, px[1]);
+		check(px[formats[f].blue_at] > 30 && px[formats[f].blue_at] < 75,
+		      "%s put %d where BLUE belongs, want about 51", formats[f].name, px[formats[f].blue_at]);
+		CGContextRelease(dst);
+		free(px);
+	}
+	CGImageRelease(image);
+	CGContextRelease(src);
+	free(src_px);
+	return g_fail - before;
+}
+
 static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "The colour spaces this library answers, by name", case_named_spaces },
 	{ "The type-id table's two promises", case_type_ids },
@@ -2094,6 +2176,7 @@ static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "The pair adjustment a line needs: the kern table, three ways", case_font_kerning },
 	{ "The pen's fraction reaches the screen: the ink moves with it, in both renderings",
 	  case_subpixel_positioning },
+	{ "Where the channels land, asked of all four destinations", case_destination_channel_order },
 	{ "Font smoothing: sub-pixel coverage, and the destination that decides it", case_font_smoothing },
 };
 
