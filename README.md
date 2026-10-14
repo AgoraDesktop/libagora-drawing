@@ -52,6 +52,16 @@ been converted back to CF", with lcms2 "not installed on this machine").
   two PairPos subtable formats, extension lookups included; ligatures, marks and contextual positioning are
   HarfBuzz's and are stated as absent. The table is read once per font and kept, and every read is bounds-checked.
 
+- **AND THE PEN'S SUB-PIXEL POSITION REACHES THE SCREEN, IN BOTH RENDERINGS.** The fraction of the pen's device
+  position is passed to the engine per glyph, and MEASURED end to end — one glyph drawn at five pen positions a
+  quarter-pixel apart, the composited ink's centre of mass compared — the grey rendering moves the ink 1.000 for a
+  pixel of travel and the smoothed one 0.250, 0.253, 0.248, 0.250 per quarter. IT DID NOT ALWAYS: the bearing of an
+  LCD bitmap is in WHOLE PIXELS (`bitmap_left` is reported in pixels for an LCD bitmap exactly as for a grey one)
+  and this file divided it by three, which put every smoothed glyph's samples in a different sub-column for every
+  phase and made the ink JUMP four tenths of a pixel as the pen moved — a wobble in the spacing of every line on
+  the desktop. `tests/drawing.c` asks it of both renderings, because a check that asked only about grey would be
+  asking about a path a person does not see.
+
 ### What is not done
 
 - **No umbrella `CoreGraphics.h`**, so Apple's usual `#include <CoreGraphics/CoreGraphics.h>` cannot be
