@@ -35,6 +35,15 @@ been converted back to CF", with lcms2 "not installed on this machine").
   the two-call contract — size first, bytes second — and both hand back what the file holds rather than an
   interpretation of it, because the side that knows what a `post` header means is the side that asked.
 
+- **AND TEXT IS DRAWN IN COLOUR: SUB-PIXEL ANTIALIASING, WHICH IS WHAT MAC OS X'S TEXT LOOKED LIKE.**
+  `CGContextSetShouldSmoothFonts` and `CGContextSetAllowsFontSmoothing` used to refuse by name; they now record,
+  and the glyph is rasterised with `FT_LOAD_TARGET_LCD` and the engine's five-tap LCD filter, then composited by a
+  hand-written per-channel blend — pixman's mask is one coverage for three channels and cannot say what sub-pixel
+  coverage MEANS. What decides whether it happens is the DESTINATION: a pixel has one alpha and three coverages,
+  so an opaque destination gets colour and one with an alpha channel gets grey. MEASURED (tests/drawing.c):
+  1223 fringed pixels into an opaque destination, **zero** into an alpha one, the same ink to 0.07%, and the
+  fringe on the correct side of the stroke — red on the left of black-on-white ink, blue on the right.
+
 ### What is not done
 
 - **No umbrella `CoreGraphics.h`**, so Apple's usual `#include <CoreGraphics/CoreGraphics.h>` cannot be
