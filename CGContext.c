@@ -1692,6 +1692,33 @@ static void cg_close_subpath(cg_flatten *fl)
 		fl->npts = 0;
 		return;
 	}
+	/* **A SUBPATH THAT DOES NOT TOUCH THE SURFACE CONTRIBUTES NOTHING, AND SAYS NOTHING.** Clipping its
+	 * outline to the surface then leaves no vertices, which is correct — the shape is off the picture — and the
+	 * refusal below is for the OTHER case: an outline that DOES cross the surface and still clips away to
+	 * nothing, which is a bug in the clipper. A STROKE hits the legitimate case constantly, because its outline
+	 * is deliberately wider than the path it strokes: MEASURED, the one-pixel border around a menu panel put a
+	 * four-point sliver just past the right edge of a 164-wide surface, and every frame printed a refusal about a
+	 * subpath that had correctly contributed nothing. The box test is the cheap way to tell the two apart, and it
+	 * runs before either buffer is allocated. */
+	{
+		double minx = fl->pts[0], maxx = fl->pts[0];
+		double miny = fl->pts[1], maxy = fl->pts[1];
+		int k;
+
+		for (k = 1; k < n; k++) {
+			double px = fl->pts[k * 2];
+			double py = fl->pts[k * 2 + 1];
+
+			if (px < minx) minx = px;
+			if (px > maxx) maxx = px;
+			if (py < miny) miny = py;
+			if (py > maxy) maxy = py;
+		}
+		if (maxx <= 0.0 || minx >= fl->width || maxy <= 0.0 || miny >= fl->height) {
+			fl->npts = 0;
+			return;
+		}
+	}
 	a = malloc((size_t)cap * 2 * sizeof(double));
 	b = malloc((size_t)cap * 2 * sizeof(double));
 	if (a == NULL || b == NULL) {
