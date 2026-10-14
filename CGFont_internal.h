@@ -147,6 +147,23 @@ int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size,
                          unsigned char **coverage, int *width, int *height, int *left, int *top,
                          double *advance, int *samples);
 
+/* **THE PAIR ADJUSTMENT BETWEEN TWO GLYPHS, IN FONT UNITS, OR ZERO.** This is the `kern` table, which is what a
+ * font's typographer wrote about specific pairs — `To`, `AV`, `P.` — as opposed to the per-glyph advance every
+ * other door here answers. It exists because a LINE has to apply it: Core Text's typesetting kerns, and without
+ * this the positions a line hands a drawing door are the unkerned ones, which is measurable as daylight between
+ * letters that were designed to touch.
+ *
+ * THE ENGINE READS THE `kern` TABLE ONLY. A face whose kerning is in `GPOS` (which is most modern text faces and
+ * many old ones) answers zero, and this door cannot tell that face from one with no kerning at all — the
+ * distinction needs a shaper this library does not have. */
+int cg_font_kern(CGFontRef font, CGGlyph left, CGGlyph right);
+
+/* **AND THE READER FOR THE PAIRS A MODERN FACE KEEPS IN `GPOS`**, which is what `cg_font_kern` falls back to when
+ * the face has no `kern` table — the case for the typeface this desktop draws with. The bytes are the whole GPOS
+ * table, the answer is in font units like every other metric here, and a table this file cannot make sense of
+ * answers 0. See `CGGPosKern.c` for how much of OpenType it does and does not read. */
+int cg_gpos_kern(const unsigned char *gpos, size_t length, unsigned left, unsigned right);
+
 /* AND THE SAME GLYPH AS GEOMETRY, which is what stroking and clipping need — and what a PDF context
  * and Core Text need too. The outline is decomposed into moves, lines, quadratics and cubics, and
  * CONIC SEGMENTS ARE PASSED THROUGH AS CONICS because a CGPath holds quadratics: converting them here

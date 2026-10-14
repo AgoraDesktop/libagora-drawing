@@ -1860,6 +1860,107 @@ static int case_font_smoothing(void)
 	return g_fail - before;
 }
 
+
+/* **THE PAIR ADJUSTMENT, WHICH IS THE ONE FONT NUMBER NO OTHER DOOR HERE ANSWERS.** An advance is a glyph's own;
+ * a KERN is the font's statement about TWO of them, and a line cannot derive it from the advances it already has.
+ * Three answers are worth holding: a real pair that the face kerns (negative, and not by accident), a real pair it
+ * does not (exactly zero), and a face with NO `kern` table at all (zero for everything, which is a result rather
+ * than an absence — the door asks `FT_HAS_KERNING` first so that such a face does not take the engine's error path
+ * once per pair). */
+static int case_font_kerning(void)
+{
+	int before = g_fail;
+	const char *prop = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
+	const char *mono = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf";
+	CGDataProviderRef provider;
+	CGFontRef font;
+	CGGlyph tg[2], og[2], hg[2];
+	UniChar t = 'T', o = 'o', h = 'h';
+	int kern;
+
+	if (access(prop, R_OK) != 0) {
+		printf("  (not run: %s is not on this machine)\n", prop);
+		return g_fail - before;
+	}
+	provider = CGDataProviderCreateWithFilename(prop);
+	font = (provider != NULL) ? CGFontCreateWithDataProvider(provider) : NULL;
+	check(font != NULL, "the proportional face could not be opened");
+	if (font == NULL) {
+		return g_fail - before;
+	}
+	memset(tg, 0, sizeof tg);
+	memset(og, 0, sizeof og);
+	memset(hg, 0, sizeof hg);
+	if (!cg_font_glyphs_for_unichars(font, &t, tg, 1) || !cg_font_glyphs_for_unichars(font, &o, og, 1)
+	    || !cg_font_glyphs_for_unichars(font, &h, hg, 1)) {
+		printf("  (not run: the face has no glyph for 'T', 'o' or 'h')\n");
+		CGFontRelease(font);
+		CGDataProviderRelease(provider);
+		return g_fail - before;
+	}
+	kern = cg_font_kern(font, tg[0], og[0]);
+	printf("  (the face asks for 'To' to close by %d units of %d)\n", kern, CGFontGetUnitsPerEm(font));
+	check(kern < 0, "'To' is not kerned by this face (%d), so the case cannot judge anything", kern);
+	check(cg_font_kern(font, tg[0], hg[0]) == 0, "'Th' is kerned by %d, want none",
+	      cg_font_kern(font, tg[0], hg[0]));
+	check(cg_font_kern(font, og[0], tg[0]) != kern || kern == 0,
+	      "the adjustment does not depend on the pair's ORDER, which it must");
+	check(cg_font_kern(NULL, tg[0], og[0]) == 0, "a kern with no face answered something other than 0");
+	CGFontRelease(font);
+	CGDataProviderRelease(provider);
+
+	/* **AND A FACE WHOSE PAIRS ARE ALL IN GPOS, WHICH IS WHAT A MODERN FACE IS.** Inter ships no `kern` table at
+	 * all, so the ENGINE's kerning door answers zero for every pair it has — MEASURED, that is why this desktop's
+	 * text was set unkerned while Pango (HarfBuzz) closed the same pair by a pixel. This is the check that the
+	 * reader on the other side of `cg_font_kern` is doing the work the engine cannot: 'To' closes and 'ck', which
+	 * the face has no opinion about, does not. */
+	{
+		const char *inter = "/usr/share/fonts/opentype/inter/Inter-Regular.otf";
+
+		if (access(inter, R_OK) == 0) {
+			UniChar c = 'c', k = 'k';
+			CGGlyph cg[2], kg[2];
+
+			provider = CGDataProviderCreateWithFilename(inter);
+			font = (provider != NULL) ? CGFontCreateWithDataProvider(provider) : NULL;
+			memset(cg, 0, sizeof cg);
+			memset(kg, 0, sizeof kg);
+			if (font != NULL && cg_font_glyphs_for_unichars(font, &t, tg, 1)
+			    && cg_font_glyphs_for_unichars(font, &o, og, 1)
+			    && cg_font_glyphs_for_unichars(font, &c, cg, 1)
+			    && cg_font_glyphs_for_unichars(font, &k, kg, 1)) {
+				int gp = cg_font_kern(font, tg[0], og[0]);
+
+				printf("  (Inter has no kern table; 'To' closes by %d units of %d, 'ck' by %d)\n", gp,
+				       CGFontGetUnitsPerEm(font), cg_font_kern(font, cg[0], kg[0]));
+				check(gp < 0, "a GPOS-only face was NOT kerned ('To' answered %d), so its pairs are "
+					      "still invisible", gp);
+				check(cg_font_kern(font, cg[0], kg[0]) == 0, "'ck' is kerned by %d, want none",
+				      cg_font_kern(font, cg[0], kg[0]));
+			}
+			CGFontRelease(font);
+			CGDataProviderRelease(provider);
+		} else {
+			printf("  (not run: %s is not on this machine, so the GPOS path was NOT exercised)\n",
+			       inter);
+		}
+	}
+
+	/* AND A FACE WITH NO `kern` TABLE AND NO PAIRS AT ALL, which a monospace face usually is. */
+	if (access(mono, R_OK) == 0) {
+		provider = CGDataProviderCreateWithFilename(mono);
+		font = (provider != NULL) ? CGFontCreateWithDataProvider(provider) : NULL;
+		if (font != NULL && cg_font_glyphs_for_unichars(font, &t, tg, 1)
+		    && cg_font_glyphs_for_unichars(font, &o, og, 1)) {
+			check(cg_font_kern(font, tg[0], og[0]) == 0,
+			      "a face with no kern table answered %d for 'To'", cg_font_kern(font, tg[0], og[0]));
+		}
+		CGFontRelease(font);
+		CGDataProviderRelease(provider);
+	}
+	return g_fail - before;
+}
+
 static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "The colour spaces this library answers, by name", case_named_spaces },
 	{ "The type-id table's two promises", case_type_ids },
@@ -1883,6 +1984,7 @@ static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "Where a drawn image lands, at three scales", case_image_draw_placement },
 	{ "The Unicode glyph step Core Text's own door sits on", case_font_unichar_mapping },
 	{ "The raw table doors, and the two calls agreeing", case_font_tables },
+	{ "The pair adjustment a line needs: the kern table, three ways", case_font_kerning },
 	{ "Font smoothing: sub-pixel coverage, and the destination that decides it", case_font_smoothing },
 };
 

@@ -47,6 +47,14 @@ struct CGFont {
 	/* THE PROVIDER IS RETAINED, NOT COPIED: FreeType's memory face POINTS INTO these bytes, so
 	 * the provider's lifetime is now the font's. See CGFont.h. */
 	CGDataProviderRef provider;
+
+	/* **THE GPOS TABLE, READ ONCE AND KEPT, BECAUSE THE QUESTIONS ASKED OF IT ARE PER PAIR.** A line asks about
+	 * every neighbouring pair it has, and reading a 30KB table out of the file for each one would be absurd; the
+	 * table is also the only place a modern font's kerning exists at all (see `CGGPosKern.c`). `tried` is what
+	 * makes "this face has none" a remembered answer rather than a repeated search. */
+	unsigned char *gpos;
+	size_t gpos_length;
+	int gpos_tried;
 };
 
 static FT_Library fn_library_handle;
@@ -310,6 +318,7 @@ void CGFontRelease(CGFontRef font)
 	if (font->provider != NULL) {
 		CGDataProviderRelease(font->provider);
 	}
+	free(font->gpos);
 	free(font);
 }
 
@@ -504,6 +513,60 @@ bool CGFontGetGlyphAdvances(CGFontRef font, const CGGlyph glyphs[], size_t count
 		advances[i] = (int)font->face->glyph->metrics.horiAdvance;
 	}
 	return true;
+}
+
+/* **THE ADJUSTMENT A PAIR OF GLYPHS ASKS FOR, IN FONT UNITS — WHICH IS WHAT KERNING IS.** A font's own
+ * typographer says that an `o` belongs closer under a `T` than the sum of their two advances puts it, and the
+ * `kern` table is where that opinion is written down: MEASURED, DejaVu Sans asks for `To` to close by 348 units of
+ * 2048 — a sixth of an em, which at 13 points is two pixels of daylight between the two letters.
+ *
+ * IT IS IN FONT UNITS FOR THE REASON `CGFontGetGlyphAdvances` IS: the caller holds the size and the em size, and
+ * a door that scaled here would be the second place that knows how a font becomes points.
+ *
+ * ZERO IS THE ORDINARY ANSWER AND NOT A FAILURE — most pairs are not in the table — and it is also what a face
+ * WITHOUT kerning answers, which is `FT_HAS_KERNING`'s question and is asked first so that a font with no table
+ * does not take the engine's error path once per pair. THE OLD `kern` TABLE IS WHAT THE ENGINE READS: a face
+ * whose kerning lives only in `GPOS` answers zero here, which is stated in the header rather than left to be
+ * discovered. */
+int cg_font_kern(CGFontRef font, CGGlyph left, CGGlyph right)
+{
+	FT_Vector kern;
+
+	if (font == NULL || font->face == NULL) {
+		return 0;
+	}
+	/* **THE OLD TABLE FIRST, AND THE MODERN ONE WHEN THERE IS NO OLD ONE.** `FT_HAS_KERNING` is the engine saying
+	 * whether the face HAS a `kern` table; a face without one used to get a zero for every pair from here, and
+	 * MEASURED that is exactly the case this desktop was in — its UI face keeps every pair in GPOS, where FreeType
+	 * does not look. So a face with the old table is answered by the engine, and a face without one is answered by
+	 * this library's own reader. A face with BOTH would be answered by the engine's, which is the older of the two
+	 * and the one a font that still ships it means. */
+	if (FT_HAS_KERNING(font->face)) {
+		if (FT_Get_Kerning(font->face, (FT_UInt)left, (FT_UInt)right, FT_KERNING_UNSCALED, &kern) != 0) {
+			return 0;
+		}
+		return (int)kern.x;
+	}
+	if (!font->gpos_tried) {
+		const uint32_t tag = ((uint32_t)'G' << 24) | ((uint32_t)'P' << 16) | ((uint32_t)'O' << 8)
+				   | (uint32_t)'S';
+		int size;
+
+		font->gpos_tried = 1;
+		size = cg_font_copy_table(font, tag, NULL, 0);
+		if (size > 0) {
+			font->gpos = (unsigned char *)malloc((size_t)size);
+			if (font->gpos != NULL) {
+				if (cg_font_copy_table(font, tag, font->gpos, (size_t)size) == size) {
+					font->gpos_length = (size_t)size;
+				} else {
+					free(font->gpos);
+					font->gpos = NULL;
+				}
+			}
+		}
+	}
+	return cg_gpos_kern(font->gpos, font->gpos_length, (unsigned)left, (unsigned)right);
 }
 
 bool CGFontGetGlyphBBoxes(CGFontRef font, const CGGlyph glyphs[], size_t count, CGRect bboxes[])
