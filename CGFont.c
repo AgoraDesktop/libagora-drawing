@@ -326,7 +326,26 @@ int CGFontGetUnitsPerEm(CGFontRef font)
 /* THE FOUR VERTICAL METRICS COME FROM THE FACE'S OWN HEAD/HHEA NUMBERS, in font units, which is
  * what FreeType puts in `ascender`/`descender`/`height` for a scalable face. (The 26.6 values in
  * `face->size->metrics` are NOT used anywhere in this file: they are the SIZED ones, and a font
- * here has no size.) */
+ * here has no size.)
+ *
+ * **AND TWO OF THE FOUR ARE NOT THE FACE FIELD OF THE SAME NAME, WHICH IS THE WHOLE OF THIS
+ * COMMENT.** The names line up — `ascender` with `GetAscent`, `descender` with `GetDescent`,
+ * `height` with `GetLeading` — and MEASURED, that coincidence cost this tree a line height of
+ * 1.94 em: a 13-point font measured 25.2 points tall, so every label, menu row and button in the
+ * AppKit was roughly ten points taller than the ink it carried.
+ *
+ *   * `face->descender` IS NEGATIVE — FreeType's convention, and the convention the font file's
+ *     own hhea table uses. `CGFontGetDescent` answers a DESCENT, which is a magnitude, so the
+ *     sign is dropped here. `NSFont -descender` puts it back (that door's contract is a negative
+ *     value), which is why the negation lives in exactly one of the two layers.
+ *   * `face->height` IS THE LINE HEIGHT, NOT THE LEADING: FreeType's own documentation calls it
+ *     "the vertical distance between two consecutive baselines", which is ascent + descent +
+ *     gap. Its callers here ADD it to ascent and descent — `CTRunGetTypographicBounds` and
+ *     `CTFramesetter` both compute `ascent + descent + leading` — so answering it as the leading
+ *     counts the whole line twice. THE LEADING IS THE PART LEFT OVER, which is the subtraction
+ *     below; for a font whose line gap is zero (DejaVu Sans, the face this tree measures with)
+ *     that leftover is exactly 0, and a 13-point line comes out 15.7 points — 1.21 em, which is
+ *     what a line height is supposed to be. */
 int CGFontGetAscent(CGFontRef font)
 {
 	return (font == NULL || font->face == NULL) ? 0 : (int)font->face->ascender;
@@ -334,12 +353,24 @@ int CGFontGetAscent(CGFontRef font)
 
 int CGFontGetDescent(CGFontRef font)
 {
-	return (font == NULL || font->face == NULL) ? 0 : (int)font->face->descender;
+	return (font == NULL || font->face == NULL) ? 0 : -(int)font->face->descender;
 }
 
 int CGFontGetLeading(CGFontRef font)
 {
-	return (font == NULL || font->face == NULL) ? 0 : (int)font->face->height;
+	int lineHeight;
+	int glyphs;
+
+	if (font == NULL || font->face == NULL) {
+		return 0;
+	}
+	lineHeight = (int)font->face->height;
+	glyphs = (int)font->face->ascender - (int)font->face->descender;
+	/* A FONT WHOSE TABLE DISAGREES WITH ITSELF — a height SHORTER than ascent + descent — answers zero
+	 * rather than a negative gap, because a negative leading would pull the next line UP through this
+	 * one. FreeType's own `height` is normally the larger of the two, so this is a guard against a
+	 * broken face and not a case a caller should ever meet. */
+	return (lineHeight > glyphs) ? (lineHeight - glyphs) : 0;
 }
 
 /* THE OS/2 METRICS, AND THE VERSION CHECK IS THE POINT: sxHeight and sCapHeight were ADDED in

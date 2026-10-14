@@ -114,7 +114,16 @@ void CGFontRelease(CGFontRef font);
 
 /* THE FACE'S OWN NUMBERS, IN FONT UNITS — the units `CGFontGetUnitsPerEm` reports. A font unit is
  * what a metric is expressed in before any size is chosen, which is why nothing here takes a
- * size and why nothing here rasterises. */
+ * size and why nothing here rasterises.
+ *
+ * **THE THREE VERTICAL METRICS ARE ALL MAGNITUDES, AND THAT IS A CONTRACT RATHER THAN A
+ * COINCIDENCE.** `CGFontGetAscent`, `CGFontGetDescent` and `CGFontGetLeading` answer numbers that
+ * ADD UP: a line's height is `ascent + descent + leading`, which is the sum `CTRunGetTypographicBounds`
+ * and `CTFramesetter` both compute, so a negative descent would SUBTRACT from the line and a
+ * leading that was the whole line height would count it twice. The engine's own face fields are
+ * not shaped that way — FreeType's `descender` is negative and its `height` is the line height —
+ * so the sign is dropped and the gap is derived, both in `CGFont.c`, and the reason is written
+ * out there. A caller that wants the SIGNED descent, as `NSFont -descender` does, negates here. */
 size_t CGFontGetNumberOfGlyphs(CGFontRef font);
 int CGFontGetUnitsPerEm(CGFontRef font);
 int CGFontGetAscent(CGFontRef font);
