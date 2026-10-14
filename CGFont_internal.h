@@ -141,7 +141,8 @@ int cg_font_is_registered(const char *path);
  * THE ANSWER SAYS WHAT WAS RENDERED rather than what was asked for: `*samples` comes back 3 when the
  * coverage is three samples to the pixel and 1 when it is grey, because a glyph the engine cannot turn
  * (a rotated one) is rendered grey and the caller has to blend what it actually got. With 3, the
- * bitmap is `*width` SAMPLES wide and `*left` is in THIRDS of a pixel; with 1, both are pixels. */
+ * bitmap is `*width` SAMPLES wide — three to a pixel, in sub-pixel order — and `*left` is in PIXELS,
+ * as it is with 1. */
 int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size,
                          CGAffineTransform matrix, CGPoint delta, int smoothing,
                          unsigned char **coverage, int *width, int *height, int *left, int *top,

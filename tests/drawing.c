@@ -1961,6 +1961,113 @@ static int case_font_kerning(void)
 	return g_fail - before;
 }
 
+
+/* **DOES THE PEN'S FRACTION REACH THE SCREEN?** Measured END TO END — a glyph drawn through a real context into an
+ * opaque bitmap at two pen positions half a pixel apart, and the composited ink's centre of mass compared. That is
+ * the question a person's eyes are asking, and it is asked of BOTH renderings: grey coverage is one sample to the
+ * pixel and the fraction is a translation of the outline, while SMOOTHED coverage is three samples to the pixel and
+ * the fraction has to land on that finer grid — different arithmetic, and the window is drawn with the second.
+ */
+static double fn_surface_centroid(CGContextRef c)
+{
+	unsigned char *px = (unsigned char *)CGBitmapContextGetData(c);
+	int stride = (int)CGBitmapContextGetBytesPerRow(c);
+	int w = (int)CGBitmapContextGetWidth(c);
+	int h = (int)CGBitmapContextGetHeight(c);
+	double mass = 0.0, moment = 0.0;
+	int x, y;
+
+	for (y = 0; y < h; y++) {
+		for (x = 0; x < w; x++) {
+			unsigned char *p = px + (size_t)y * (size_t)stride + (size_t)x * 4u;   /* memory B, G, R, X */
+			double darkness = 255.0 - ((double)p[0] + (double)p[1] + (double)p[2]) / 3.0;
+
+			if (darkness <= 0.0) {
+				continue;
+			}
+			mass += darkness;
+			moment += darkness * ((double)x + 0.5);
+		}
+	}
+	return mass > 0.0 ? moment / mass : 0.0;
+}
+
+static int case_subpixel_positioning(void)
+{
+	int before = g_fail;
+	const char *path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
+	CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+	CGDataProviderRef provider;
+	CGFontRef font;
+	CGGlyph glyph = 0;
+	UniChar l = 'l';
+	int smoothing;
+
+	if (access(path, R_OK) != 0) {
+		printf("  (not run: %s is not on this machine)\n", path);
+		return g_fail - before;
+	}
+	provider = CGDataProviderCreateWithFilename(path);
+	font = (provider != NULL) ? CGFontCreateWithDataProvider(provider) : NULL;
+	check(font != NULL, "the face could not be opened");
+	if (font == NULL) {
+		return g_fail - before;
+	}
+	if (!cg_font_glyphs_for_unichars(font, &l, &glyph, 1)) {
+		printf("  (not run: the face has no glyph for 'l')\n");
+		CGFontRelease(font);
+		CGDataProviderRelease(provider);
+		return g_fail - before;
+	}
+	for (smoothing = 0; smoothing < 2; smoothing++) {
+		double at[5];
+		int i;
+
+		for (i = 0; i < 5; i++) {
+			unsigned char *px = (unsigned char *)calloc(64u * 48u, 4u);
+			CGContextRef ctx = (px != NULL)
+				? CGBitmapContextCreate(px, 64, 48, 8, 64 * 4, rgb,
+							(uint32_t)(kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little))
+				: NULL;
+
+			/* **WHITE, BECAUSE AN OPAQUE DESTINATION IS NOT HANDED A COLOUR** — `x` formats have none, and a
+			 * buffer left as zeros is not "empty", it is black, which is why the first version of this measured
+			 * every pen position as the bitmap's own centre. */
+			if (ctx != NULL) {
+				memset(px, 0xFF, 64u * 48u * 4u);
+			}
+
+			if (ctx == NULL) {
+				free(px);
+				at[i] = 0.0;
+				continue;
+			}
+			CGContextSetShouldSmoothFonts(ctx, smoothing ? true : false);
+			CGContextSetRGBFillColor(ctx, 0.0, 0.0, 0.0, 1.0);
+			CGContextSetFont(ctx, font);
+			CGContextSetFontSize(ctx, 26.0);
+			CGContextSetTextMatrix(ctx, CGAffineTransformIdentity);
+			CGContextShowGlyphsAtPoint(ctx, 10.0 + 0.25 * (double)i, 30.0, &glyph, 1);
+			at[i] = fn_surface_centroid(ctx);
+			CGContextRelease(ctx);
+			free(px);
+		}
+		printf("  (%s: the pen at 10.00/10.25/10.50/10.75/11.00 puts the ink at %.3f/%.3f/%.3f/%.3f/%.3f)\n",
+		       smoothing ? "SMOOTHED" : "grey    ", at[0], at[1], at[2], at[3], at[4]);
+		for (i = 1; i < 5; i++) {
+			check(at[i] - at[i - 1] > 0.05 && at[i] - at[i - 1] < 0.45,
+			      "the %s pen's quarter-pixel step %d moved the ink by %.3f, want about a quarter",
+			      smoothing ? "smoothed" : "grey", i, at[i] - at[i - 1]);
+		}
+		check(at[4] - at[0] > 0.6 && at[4] - at[0] < 1.4,
+		      "the %s ink moved %.3f over a WHOLE pixel of pen travel", smoothing ? "smoothed" : "grey",
+		      at[4] - at[0]);
+	}
+	CGFontRelease(font);
+	CGDataProviderRelease(provider);
+	return g_fail - before;
+}
+
 static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "The colour spaces this library answers, by name", case_named_spaces },
 	{ "The type-id table's two promises", case_type_ids },
@@ -1985,6 +2092,8 @@ static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "The Unicode glyph step Core Text's own door sits on", case_font_unichar_mapping },
 	{ "The raw table doors, and the two calls agreeing", case_font_tables },
 	{ "The pair adjustment a line needs: the kern table, three ways", case_font_kerning },
+	{ "The pen's fraction reaches the screen: the ink moves with it, in both renderings",
+	  case_subpixel_positioning },
 	{ "Font smoothing: sub-pixel coverage, and the destination that decides it", case_font_smoothing },
 };
 

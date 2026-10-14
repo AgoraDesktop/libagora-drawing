@@ -5036,12 +5036,12 @@ static int cg_font_smoothing(CGContextRef c)
  * the destination has to be attenuated per channel, and no pixman operator says that. So the samples are walked
  * directly, which is what every implementation of this does.
  *
- * **AND THE SAMPLES ARE ON A THIRD-OF-A-PIXEL GRID, WHICH `left` SAYS THE POSITION OF.** The destination's
- * sub-columns are fixed to its pixels, so a bitmap whose first sample is not on a pixel boundary has to be
- * entered part-way through the first pixel. THAT IS NOT A DETAIL: entering it at the boundary instead writes
- * every channel from its NEIGHBOUR's coverage, and the glyph comes out tinted red on one side and blue on the
- * other. The loop below is therefore over SAMPLES, and each one lands on the pixel and the CHANNEL that its own
- * sub-column names. */
+ * **AND `left` IS A WHOLE-PIXEL BEARING FOR BOTH RENDERINGS, SO THE SAMPLES LAND WHERE THEY SAY.** The engine
+ * reports an LCD bitmap's bearing in PIXELS like a grey one's — MEASURED, and this is the correction a sweep of the
+ * pen's phase made: treating it as thirds put the ink in a different sub-column for every phase, and the composited
+ * glyph JITTERED by four tenths of a pixel as the pen moved, which is a wobble a reader sees as uneven spacing.
+ * The samples of a pixel are its three sub-pixels, in order, so sample `3k + c` is channel `c` of pixel `left + k`
+ * and no remainder is involved at all. */
 static void cg_composite_glyph_smoothed(CGContextRef c, const unsigned char *bitmap, int nsamples,
 					int rows, int left, int dx, int dy)
 {
@@ -5070,9 +5070,8 @@ static void cg_composite_glyph_smoothed(CGContextRef c, const unsigned char *bit
 			continue;
 		}
 		for (sample = 0; sample < nsamples; sample++) {
-			int sub = left + sample;
-			int column = (sub >= 0) ? (sub / 3) : -(((-sub) + 2) / 3);
-			int channel = sub - 3 * column;
+			int column = left + sample / 3;		/* sample 3k+c is channel c of pixel left + k */
+			int channel = sample % 3;
 			int x = dx + column;
 			unsigned char *d;
 			double k, dst;

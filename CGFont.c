@@ -1077,11 +1077,11 @@ int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size, CGAf
 		       (size_t)w);
 	}
 	*coverage = buf;
-	/* **`*width` IS A COUNT OF SAMPLES AND NOT OF PIXELS**, and `*samples` says how many of them make a pixel —
-	 * which is the same statement `*left` is in: a smoothed bitmap's samples sit on a grid THREE TIMES finer than
-	 * the destination's, so the bearing comes back in thirds of a pixel, and the caller needs that fraction to
-	 * line the samples up with the destination's own sub-columns. One sample per pixel makes both of them the
-	 * plain whole-pixel numbers they have always been. */
+	/* **`*width` IS A COUNT OF SAMPLES AND NOT OF PIXELS**, and `*samples` says how many of them make a pixel.
+	 * `*left` IS IN WHOLE PIXELS FOR BOTH — MEASURED, and worth stating because the obvious guess is wrong: the
+	 * engine reports an LCD bitmap's bearing in pixels exactly as it does a grey one's, and the finer grid lives
+	 * entirely in the samples' own values. A caller that divided it by three would place every smoothed glyph in
+	 * a different sub-column for every pen phase. */
 	*width = w;
 	*height = h;
 	if (samples != NULL) {
