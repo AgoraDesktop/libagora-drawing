@@ -35,6 +35,16 @@ been converted back to CF", with lcms2 "not installed on this machine").
   the two-call contract — size first, bytes second — and both hand back what the file holds rather than an
   interpretation of it, because the side that knows what a `post` header means is the side that asked.
 
+- **AND WHERE THE CHANNELS LAND IS DECIDED IN ONE PLACE, `cg_channel_slots`, FROM THE ALPHA'S POSITION.** A
+  destination's colour order is a property of its LAYOUT and not of its fourth byte: `NoneSkipFirst` is B, G, R, X
+  exactly as `PremultipliedFirst` is, and `NoneSkipLast` is R, G, B as `PremultipliedLast` is. Three writers used to
+  work that out separately and ALL THREE got an opaque spelling wrong — the image sampler by comparing the
+  destination's pixman format to `a8r8g8b8`, which a window's `x8r8g8b8` surface is not, and two others by reading
+  "`PremultipliedLast`" as "R, G, B" with a fall-through for everything else. MEASURED, the window chrome's close
+  button came out (86, 80, 242) where the theme's `#F25056` is (242, 80, 86). The image sampler, the plus-darker
+  hand composite and the smoothed glyph's per-channel blend all ask the helper now, and a case draws one image
+  whose channels are all different into each of the four destinations and asserts the byte at each position.
+
 - **AND TEXT IS DRAWN IN COLOUR: SUB-PIXEL ANTIALIASING, WHICH IS WHAT MAC OS X'S TEXT LOOKED LIKE.**
   `CGContextSetShouldSmoothFonts` and `CGContextSetAllowsFontSmoothing` used to refuse by name; they now record,
   and the glyph is rasterised with `FT_LOAD_TARGET_LCD` and the engine's five-tap LCD filter, then composited by a
