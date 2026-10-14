@@ -642,11 +642,20 @@ void CGContextSetCharacterSpacing(CGContextRef context, CGFloat spacing);
  * everything else. WITH POSITIONING OFF THE PEN IS ROUNDED TO WHOLE DEVICE PIXELS, which is exactly what
  * this library did before it could do better.
  *
- * THE OTHER FOUR SETTERS EXIST AND REFUSE BY NAME, because each is a rendering path this library does
- * not have rather than a flag it forgot: smoothing is LCD subpixel ANTIALIASING (three samples per pixel
- * and a filter along their order), and quantisation is refused because the header says a context
- * "quantizes subpixel positions" and NEVER SAYS TO WHAT — choosing a quantum would be inventing a
- * contract rather than duplicating one. */
+ * **AND SMOOTHING IS IMPLEMENTED, BECAUSE IT IS WHAT MAC OS X'S TEXT LOOKED LIKE.** It is sub-pixel
+ * ANTIALIASING: the engine renders three samples per pixel — colour coverage, filtered along their order —
+ * and each of the destination's three channels is attenuated by its OWN sample, which is where the extra
+ * horizontal resolution comes from. Its two flags mirror the positioning pair's, down to where they live:
+ * `allowsFontSmoothing` is the context's and `shouldSmoothFonts` is the graphics state's.
+ *
+ * WHAT DECIDES WHETHER IT HAPPENS IS THE DESTINATION, and that is a property of the pixels rather than of a
+ * flag: a pixel has ONE alpha and three coverages, so a destination with an alpha channel cannot carry colour
+ * coverage and is rendered grey. THAT IS WHY THIS LIBRARY NOW ANSWERS an OPAQUE format
+ * (`kCGImageAlphaNoneSkipFirst` and its byte-order twin) — it is what an opaque window's surface IS, and the
+ * AppKit makes its window one.
+ *
+ * QUANTISATION IS STILL REFUSED BY NAME, because the header says a context "quantizes subpixel positions" and
+ * NEVER SAYS TO WHAT — choosing a quantum would be inventing a contract rather than duplicating one. */
 void CGContextSetAllowsFontSubpixelPositioning(CGContextRef context, bool allows);
 void CGContextSetShouldSubpixelPositionFonts(CGContextRef context, bool should);
 void CGContextSetAllowsFontSmoothing(CGContextRef context, bool allows);

@@ -135,10 +135,17 @@ int cg_font_is_registered(const char *path);
 /* `delta` IS THE SUBPIXEL FRACTION OF THE PEN, IN DEVICE UNITS (x right, y down — the engine's own
  * frame is handled inside). A whole-pixel caller passes (0,0) and gets the old behaviour; a caller
  * that has been asked not to subpixel-position passes (0,0) too, because rounding the pen IS that
- * setting. */
+ * setting.
+ *
+ * `smoothing` ASKS FOR SUB-PIXEL COVERAGE — the colour antialiasing Mac OS X is remembered for — and
+ * THE ANSWER SAYS WHAT WAS RENDERED rather than what was asked for: `*samples` comes back 3 when the
+ * coverage is three samples to the pixel and 1 when it is grey, because a glyph the engine cannot turn
+ * (a rotated one) is rendered grey and the caller has to blend what it actually got. With 3, the
+ * bitmap is `*width` SAMPLES wide and `*left` is in THIRDS of a pixel; with 1, both are pixels. */
 int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size,
-                         CGAffineTransform matrix, CGPoint delta, unsigned char **coverage,
-                         int *width, int *height, int *left, int *top, double *advance);
+                         CGAffineTransform matrix, CGPoint delta, int smoothing,
+                         unsigned char **coverage, int *width, int *height, int *left, int *top,
+                         double *advance, int *samples);
 
 /* AND THE SAME GLYPH AS GEOMETRY, which is what stroking and clipping need — and what a PDF context
  * and Core Text need too. The outline is decomposed into moves, lines, quadratics and cubics, and

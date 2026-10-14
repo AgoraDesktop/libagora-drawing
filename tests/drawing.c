@@ -1612,6 +1612,254 @@ static int case_font_tables(void)
 	return g_fail - before;
 }
 
+
+/* ============================================================================================ *
+ * FONT SMOOTHING: SUB-PIXEL ANTIALIASING, AND THE DESTINATION THAT DECIDES IT.                  *
+ *                                                                                                *
+ * **THE COLOUR IS THE POINT AND THE COLOUR IS WHAT IS MEASURED.** Sub-pixel coverage means a      *
+ * pixel's three channels are covered by DIFFERENT amounts — that is where the extra horizontal     *
+ * resolution comes from — so the signature of a smoothed glyph is a pixel whose red, green and     *
+ * blue differ. Grey coverage cannot produce one: the three channels move together by                *
+ * construction. A test that only counted ink could not tell the two apart, so this counts the      *
+ * CHANNEL SPLIT, and the same glyph is drawn into two contexts that differ in one thing —          *
+ * whether the destination has an alpha channel.                                                    *
+ *                                                                                                *
+ * THE OTHER HALF IS THAT THE WEIGHT IS UNCHANGED. Smoothing re-samples a glyph; it does not        *
+ * redraw it heavier. MEASURED against the outline's own area, the smoothed render of a word puts   *
+ * down within a couple of per cent of the grey one (FT_LOAD_TARGET_LCD against FT_LOAD_DEFAULT),   *
+ * so the ink count is checked here to within a few per cent rather than left unasked.             *
+ * ============================================================================================ */
+static int case_font_smoothing(void)
+{
+	int before = g_fail;
+	const char *path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
+	const char *word = "Hamburgefons";
+	const size_t side = 200;
+	const size_t bpr = side * 4;
+	CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+	CGDataProviderRef provider;
+	CGFontRef font;
+	unsigned char *kept[2] = { NULL, NULL };
+	int opaque_fringes = 0, alpha_fringes = 0;
+	int opaque_ink = 0, alpha_ink = 0;
+	double opaque_mass = 0.0, alpha_mass = 0.0;
+	int biggest_split = 0;
+	int variant;
+
+	if (access(path, R_OK) != 0) {
+		printf("  (not run: %s is not on this machine)\n", path);
+		return g_fail - before;
+	}
+	provider = CGDataProviderCreateWithFilename(path);
+	font = (provider != NULL) ? CGFontCreateWithDataProvider(provider) : NULL;
+	check(font != NULL, "the face could not be opened, so smoothing cannot be asked for");
+	if (font == NULL) {
+		return g_fail - before;
+	}
+
+	/* TWO CONTEXTS, ONE PROPERTY APART. The bytes are the same format for both — B, G, R, then a byte
+	 * that is an ALPHA in one and NOT WRITTEN in the other — so the only difference the renderer can see
+	 * is the one this case is about. */
+	for (variant = 0; variant < 2; variant++) {
+		unsigned char *px = (unsigned char *)calloc(side * side, 4);
+		uint32_t info = (variant == 0)
+			? (uint32_t)(kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little)
+			: (uint32_t)(kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+		CGContextRef ctx;
+		size_t x, y;
+		int fringes = 0, ink = 0;
+		double mass = 0.0;
+
+		if (px == NULL) {
+			continue;
+		}
+		/* WHITE, BECAUSE THE FRINGE SHOWS ON A LIGHT GROUND and because an opaque destination has to be
+		 * given its colour: an `x` context never had one. */
+		for (x = 0; x < side * side; x++) {
+			px[x * 4 + 0] = 255;
+			px[x * 4 + 1] = 255;
+			px[x * 4 + 2] = 255;
+			px[x * 4 + 3] = 255;
+		}
+		ctx = CGBitmapContextCreate(px, side, side, 8, bpr, rgb, info);
+		check(ctx != NULL, "a %s destination was refused", variant == 0 ? "opaque" : "alpha");
+		if (ctx == NULL) {
+			free(px);
+			continue;
+		}
+		kept[variant] = px;
+		CGContextSetRGBFillColor(ctx, 0.0, 0.0, 0.0, 1.0);
+		CGContextSetFont(ctx, font);
+		CGContextSetFontSize(ctx, 26.0);
+		CGContextSetTextMatrix(ctx, CGAffineTransformIdentity);
+		CGContextShowTextAtPoint(ctx, 10.0, 60.0, word, strlen(word));
+
+		for (y = 0; y < side; y++) {
+			for (x = 0; x < side; x++) {
+				unsigned char *p = px + (y * side + x) * 4;   /* memory B, G, R */
+				int split = (int)p[2] - (int)p[1];
+				int split2 = (int)p[1] - (int)p[0];
+
+				if (split < 0) {
+					split = -split;
+				}
+				if (split2 < 0) {
+					split2 = -split2;
+				}
+				if (split > 8 || split2 > 8) {
+					fringes++;
+					if (split > biggest_split) {
+						biggest_split = split;
+					}
+					if (split2 > biggest_split) {
+						biggest_split = split2;
+					}
+				}
+				if (p[0] < 200 || p[1] < 200 || p[2] < 200) {
+					ink++;
+				}
+				/* **THE INK IS MEASURED AS MASS AND NOT AS A COUNT OF DARK PIXELS**, because that is the
+				 * difference sub-pixel coverage makes: it SPREADS a glyph's ink over more pixels at lower
+				 * coverage each, so a count of "how many pixels are dark" rises even though the same ink was
+				 * put down. Summing the channels' darkness is proportional to the covered area for BOTH
+				 * coverages — three samples of a pixel add up to three times its average coverage — so the
+				 * two are the same kind of number and can be compared. */
+				mass += (255.0 - (double)p[0]) + (255.0 - (double)p[1]) + (255.0 - (double)p[2]);
+			}
+		}
+		if (variant == 0) {
+			opaque_fringes = fringes;
+			opaque_ink = ink;
+			opaque_mass = mass;
+		} else {
+			alpha_fringes = fringes;
+			alpha_ink = ink;
+			alpha_mass = mass;
+		}
+		CGContextRelease(ctx);
+	}
+	printf("  (opaque: %d fringed pixels, strongest split %d, ink %.0f; alpha: %d fringed, ink %.0f)\n",
+	       opaque_fringes, biggest_split, opaque_mass, alpha_fringes, alpha_mass);
+
+	/* 1. THE GLYPHS WERE DRAWN AT ALL, in both destinations. */
+	check(opaque_ink > 500, "the word did not reach the opaque destination (%d inked)", opaque_ink);
+	check(alpha_ink > 500, "the word did not reach the alpha destination (%d inked)", alpha_ink);
+
+	/* 2. THE OPAQUE ONE IS IN COLOUR: per-channel coverage, which is what sub-pixel antialiasing IS. */
+	check(opaque_fringes > 200, "a smoothed glyph put down %d fringed pixels, want hundreds",
+	      opaque_fringes);
+
+	/* 3. AND THE ALPHA ONE IS NOT, BECAUSE A LAYER WITH TRANSPARENCY CANNOT CARRY IT. This is the check
+	 * that would pass if the gate were missing and the renderer smoothed everything. */
+	check(alpha_fringes == 0, "an ALPHA destination got %d fringed pixels — smoothing was not gated on it",
+	      alpha_fringes);
+
+	/* 4. AND THE WEIGHT IS THE SAME. Smoothing re-samples a glyph; it does not draw it heavier. The two
+	 * ink counts are the same glyph in the two coverages, so they must agree closely. */
+	{
+		double ratio = (opaque_mass > 0.0) ? alpha_mass / opaque_mass : 0.0;
+
+		check(ratio > 0.9 && ratio < 1.1, "the smoothed and grey inks differ by %.1f%% (%.0f against %.0f)",
+		      100.0 * (ratio - 1.0), opaque_mass, alpha_mass);
+	}
+	/* 5. **AND THE SAMPLES LAND ON THE CHANNELS THEY BELONG TO.** A smoothed glyph and a grey one of the same
+	 * word cover the SAME area — check 4 above says so to a fraction of a per cent — but the smoothed one spreads
+	 * that coverage ACROSS the three channels of each pixel, so the two bitmaps are not equal pixel for pixel.
+	 * What they must agree on is the average: the mean of a pixel's three channels is that pixel's coverage,
+	 * whatever the samples did inside it. SO THE CHECK IS THE PER-PIXEL DIFFERENCE BETWEEN THE SMOOTHED AVERAGE AND
+	 * THE GREY VALUE, summed.
+	 *
+	 * IT IS THE CHECK THAT CATCHES A MISALIGNED BITMAP. Entering the samples at a pixel boundary when the glyph's
+	 * first sample is not on one writes every channel from its NEIGHBOUR's coverage — the fringe becomes a colour
+	 * cast over the whole glyph — and that MOVES COVERAGE FROM ONE PIXEL TO THE NEXT, which is exactly what this
+	 * sum measures. A faithful redistribution leaves a small residual; a shifted one leaves a large one. */
+	{
+		double l1 = 0.0, ink = 0.0;
+		size_t x, y;
+
+		for (y = 0; y < side; y++) {
+			for (x = 0; x < side; x++) {
+				const unsigned char *sm = kept[0] + (y * side + x) * 4;
+				const unsigned char *gr = kept[1] + (y * side + x) * 4;
+				double average = ((double)sm[0] + (double)sm[1] + (double)sm[2]) / 3.0;
+
+				l1 += average > (double)gr[0] ? average - (double)gr[0]
+							      : (double)gr[0] - average;
+				ink += 255.0 - (double)gr[0];
+			}
+		}
+		printf("  (the smoothed average differs from the grey render by %.0f, against %.0f of ink: %.1f%%)\n",
+		       l1, ink, 100.0 * l1 / (ink > 0.0 ? ink : 1.0));
+		check(ink > 0.0 && l1 < 0.5 * ink,
+		      "the smoothed average is %.1f%% away from the grey render, which is a SHIFTED bitmap rather "
+		      "than a re-sampled one", 100.0 * l1 / (ink > 0.0 ? ink : 1.0));
+	}
+	/* 6. **AND WHICH WAY THE FRINGE POINTS, WHICH IS THE SHARPEST STATEMENT AVAILABLE ABOUT WHERE THE SAMPLES
+	 * WENT.** The engine assumes the destination's three sub-pixels are R, G, B from left to right, and the LEFT
+	 * edge of black-on-white ink — ink to the right, paper to the left — is where the coverage RISES rightward:
+	 * the red sample (the leftmost of the three) is the one the ink covers LEAST, so it stays brightest and that
+	 * edge pixel comes out REDDER THAN IT IS BLUE. The word's right edge is the mirror of it and comes out
+	 * BLUER. MEASURED at 26 points: the left edge reads r 253 against b 140, the right r 37 against b 82 — which
+	 * is the classic fringe, red on the left of the stroke and blue on the right.
+	 *
+	 * THAT ORDER IS A FACT ABOUT THE ALIGNMENT AND NOT ABOUT THE GLYPH, which is what makes it worth asserting: a
+	 * bitmap entered at a pixel boundary instead of at its first sample writes every channel from its NEIGHBOUR's
+	 * coverage, SHIFTING the fringe by one sub-pixel and reversing these two edges — while the ink and the mass
+	 * above both still agree, because neither of those can see a shift. */
+	{
+		int leftmost = -1, rightmost = -1;
+		size_t x, y;
+		double left_r = 0.0, left_b = 0.0, right_r = 0.0, right_b = 0.0;
+		int left_n = 0, right_n = 0;
+
+		for (x = 0; x < side; x++) {
+			for (y = 0; y < side; y++) {
+				const unsigned char *p = kept[0] + (y * side + x) * 4;
+
+				if (p[0] < 200 || p[1] < 200 || p[2] < 200) {
+					if (leftmost < 0) {
+						leftmost = (int)x;
+					}
+					rightmost = (int)x;
+					break;
+				}
+			}
+		}
+		if (leftmost >= 0) {
+			for (y = 0; y < side; y++) {
+				const unsigned char *l = kept[0] + (y * side + (size_t)leftmost) * 4;
+				const unsigned char *r = kept[0] + (y * side + (size_t)rightmost) * 4;
+
+				if (l[0] < 200 || l[1] < 200 || l[2] < 200) {
+					left_r += (double)l[2];		/* memory B, G, R */
+					left_b += (double)l[0];
+					left_n++;
+				}
+				if (r[0] < 200 || r[1] < 200 || r[2] < 200) {
+					right_r += (double)r[2];
+					right_b += (double)r[0];
+					right_n++;
+				}
+			}
+		}
+		printf("  (left edge %d: r %.0f b %.0f; right edge %d: r %.0f b %.0f)\n", leftmost,
+		       left_n ? left_r / left_n : 0.0, left_n ? left_b / left_n : 0.0, rightmost,
+		       right_n ? right_r / right_n : 0.0, right_n ? right_b / right_n : 0.0);
+		check(left_n > 0 && right_n > 0 && left_r > left_b,
+		      "the LEFT edge of the word is not redder than it is blue (r %.0f against b %.0f) — the samples "
+		      "are not lined up with the destination's sub-pixels",
+		      left_n ? left_r / left_n : 0.0, left_n ? left_b / left_n : 0.0);
+		check(right_n > 0 && right_b > right_r,
+		      "the RIGHT edge of the word is not bluer than it is red (r %.0f against b %.0f)",
+		      right_n ? right_r / right_n : 0.0, right_n ? right_b / right_n : 0.0);
+	}
+	free(kept[0]);
+	free(kept[1]);
+	CGFontRelease(font);
+	CGDataProviderRelease(provider);
+	return g_fail - before;
+}
+
 static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "The colour spaces this library answers, by name", case_named_spaces },
 	{ "The type-id table's two promises", case_type_ids },
@@ -1635,6 +1883,7 @@ static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "Where a drawn image lands, at three scales", case_image_draw_placement },
 	{ "The Unicode glyph step Core Text's own door sits on", case_font_unichar_mapping },
 	{ "The raw table doors, and the two calls agreeing", case_font_tables },
+	{ "Font smoothing: sub-pixel coverage, and the destination that decides it", case_font_smoothing },
 };
 
 int main(void)

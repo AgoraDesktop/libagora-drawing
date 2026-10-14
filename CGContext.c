@@ -110,6 +110,8 @@ typedef struct cg_state {
 	/* THE GRAPHICS-STATE HALF OF THE SUBPIXEL PAIR. See the context's `allows_` flag above for why
 	 * this one is here and that one is not. */
 	int should_subpixel_position_fonts;
+	/* AND THE SAME ASYMMETRY FOR SMOOTHING: its `Allows` is the context's and its `Should` is the state's. */
+	int should_smooth_fonts;
 	/* THE SHADOW, WHICH IS A GRAPHICS-STATE PARAMETER — so Save/Restore carry it for free, the struct
 	 * being copied — and whose OFF STATE IS A FULLY TRANSPARENT COLOUR rather than a flag, which is
 	 * Apple's own definition: "if `color` is NULL, it's equivalent to specifying a fully transparent
@@ -197,6 +199,9 @@ struct CGContext {
 	 * their `Should` twins ARE in the state below. THAT ASYMMETRY IS THE INTERFACE, and the probe
 	 * checks it by saving, turning the state flag off, drawing, and restoring. */
 	int allows_subpixel_positioning;
+	/* AND SMOOTHING'S HALF OF THE SAME PAIR — sub-pixel ANTIALIASING, three samples to the pixel, which is a
+	 * different rendering path from sub-pixel POSITIONING and governed by its own two flags. */
+	int allows_font_smoothing;
 	cg_state state;
 	cg_state *stack;
 	int depth;
@@ -325,6 +330,9 @@ static void cg_state_init_full(cg_state *st, int width, int height)
 	 * fields are stated too: a default that depends on an enumerator's position is a default nobody
 	 * chose, and this one is the library's PRE-EXISTING behaviour held on purpose (see CGContext.h). */
 	st->interpolation = kCGInterpolationNone;
+	/* AND SMOOTHING IS WANTED BY DEFAULT, pairing with the context's `allows_font_smoothing`. The two are read
+	 * together in `cg_font_smoothing`, whose third term is the destination's own opacity. */
+	st->should_smooth_fonts = 1;
 	st->clip_mask = NULL;
 	st->clip_mask_x = 0;
 	st->clip_mask_y = 0;
@@ -396,6 +404,16 @@ static pixman_format_code_t cg_context_format(uint32_t bitmap_info)
 	if (alpha == kCGImageAlphaPremultipliedLast && order == kCGBitmapByteOrder32Big) {
 		return PIXMAN_a8b8g8r8;		/* memory R, G, B, A */
 	}
+	/* **AND THE TWO OPAQUE FORMATS, WHICH ARE WHAT SUB-PIXEL ANTIALIASING NEEDS ITS DESTINATION TO BE.** They
+	 * carry no alpha channel at all, which is exactly the property `cg_font_smoothing` asks for, and pixman's
+	 * `x` formats are the same words with the fourth byte NOT WRITTEN — so a context made this way keeps its
+	 * three colour channels and never grows a transparency it did not have. */
+	if (alpha == kCGImageAlphaNoneSkipFirst && order == kCGBitmapByteOrder32Little) {
+		return PIXMAN_x8r8g8b8;		/* memory B, G, R, X */
+	}
+	if (alpha == kCGImageAlphaNoneSkipLast && order == kCGBitmapByteOrder32Big) {
+		return PIXMAN_x8b8g8r8;		/* memory R, G, B, X */
+	}
 	return (pixman_format_code_t)0;
 }
 
@@ -422,12 +440,15 @@ CGContextRef CGBitmapContextCreateWithData(void *data, size_t width, size_t heig
 		return NULL;
 	}
 	if (cg_context_format(bitmap_info) == 0) {
-		fprintf(stderr, "CG-REFUSE: CGBitmapContextCreate supports "
-				"kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little (memory "
-				"B,G,R,A, every canvas this tree made before) and "
+		fprintf(stderr, "CG-REFUSE: CGBitmapContextCreate supports four 8-bit orders, each "
+				"in an alpha and an OPAQUE spelling: kCGImageAlphaPremultipliedFirst | "
+				"kCGBitmapByteOrder32Little (memory B,G,R,A, every canvas this tree made "
+				"before) and kCGImageAlphaNoneSkipFirst with it; and "
 				"kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big (memory R,G,B,A, "
-				"which is what an NSBitmapImageRep's own CGImage declares); the other two "
-				"orders have no pixman format here\n");
+				"which is what an NSBitmapImageRep's own CGImage declares) and "
+				"kCGImageAlphaNoneSkipLast with it. The opaque pair is what FONT SMOOTHING "
+				"needs a destination to be, and the remaining orders have no pixman format "
+				"here\n");
 		(void)alpha;
 		(void)order;
 		return NULL;
@@ -470,6 +491,11 @@ CGContextRef CGBitmapContextCreateWithData(void *data, size_t width, size_t heig
 	 * its comment adds ("fonts will be antialiased when drawn"). Written out rather than
 	 * abbreviated, because each term is a door somebody can close. */
 	c->allows_subpixel_positioning = 1;
+	/* **AND SMOOTHING IS ALLOWED BY DEFAULT, WHICH IS WHAT MAKES THE DESKTOP'S TEXT LOOK LIKE THE MAC'S.** This
+	 * tier's AppKit never calls these doors, so a default of "off" would mean a renderer that can and never
+	 * does; the destination has the last word in `cg_font_smoothing` below, where a context with an alpha
+	 * channel never gets colour coverage. */
+	c->allows_font_smoothing = 1;
 	c->refcount = 1;
 	cg_state_init_full(&c->state, (int)width, (int)height);
 	c->path = (struct CGPath *)CGPathCreateMutable();
@@ -4847,27 +4873,31 @@ void CGContextSetShouldSubpixelPositionFonts(CGContextRef c, bool should)
 	}
 }
 
-/* THE FOUR DOORS THIS LIBRARY REFUSES BY NAME, and each is a real gap rather than a formality.
- * SMOOTHING is LCD subpixel ANTIALIASING: the engine renders 8-bit grey coverage here, and a
- * smoothed glyph needs three samples per pixel and a filter applied along their order, which is a
- * different rendering path rather than a flag. QUANTIZATION is refused because THE 10.6 HEADER NEVER
- * SAYS WHAT IT QUANTIZES — it says a context "quantizes subpixel positions" and stops — and picking a
- * quantum (a third of a pixel is the usual one) would be this library inventing a contract. The
- * setters still exist and still record nothing, which is the same shape as every other refusal here:
- * a caller who asked for something gets a message, not a silent no-op that looks like it worked. */
+/* **SMOOTHING IS IMPLEMENTED, AND IT IS SUB-PIXEL ANTIALIASING: THREE SAMPLES TO THE PIXEL, FILTERED ALONG
+ * THEIR ORDER.** The engine renders colour coverage (`cg_font_render_glyph`'s `smoothing`), the samples are
+ * lined up with the destination's own sub-columns, and `cg_composite_glyph_smoothed` blends each channel with
+ * its own coverage — the one paint in this file that cannot go through pixman, because a mask there is a single
+ * coverage for all three channels.
+ *
+ * THE TWO DOORS RECORD, like the sub-pixel POSITIONING pair above and for the same reason: one is the context's
+ * and one is the graphics state's, and the effective question is asked in one place (`cg_font_smoothing`) so
+ * that the two cannot disagree.
+ *
+ * QUANTIZATION IS STILL REFUSED, AND FOR ITS OWN REASON: THE 10.6 HEADER NEVER SAYS WHAT IT QUANTIZES — it says
+ * a context "quantizes subpixel positions" and stops — and picking a quantum (a third of a pixel is the usual
+ * one) would be this library inventing a contract rather than duplicating one. */
 void CGContextSetAllowsFontSmoothing(CGContextRef c, bool allows)
 {
-	(void)c;
-	(void)allows;
-	fprintf(stderr, "CG-REFUSE: font smoothing is LCD subpixel antialiasing, which needs a filtered "
-			"three-sample path; this library renders 8-bit grey coverage only\n");
+	if (c != NULL) {
+		c->allows_font_smoothing = allows ? 1 : 0;
+	}
 }
 
 void CGContextSetShouldSmoothFonts(CGContextRef c, bool should)
 {
-	(void)c;
-	(void)should;
-	fprintf(stderr, "CG-REFUSE: font smoothing (the state's half) is refused for the reason above\n");
+	if (c != NULL) {
+		c->state.should_smooth_fonts = should ? 1 : 0;
+	}
 }
 
 void CGContextSetAllowsFontSubpixelQuantization(CGContextRef c, bool allows)
@@ -4978,6 +5008,105 @@ static int cg_subpixel_positioning(CGContextRef c)
 	       && c->allows_antialiasing && c->state.antialias;
 }
 
+/* **WHETHER A GLYPH IS RASTERISED IN COLOUR: SUB-PIXEL COVERAGE, THREE SAMPLES TO THE PIXEL.** Four terms, and
+ * the fourth is the one that makes it correct rather than merely switched on — THE DESTINATION MUST HAVE NO ALPHA
+ * CHANNEL. A pixel's three samples attenuate its three channels INDEPENDENTLY and there is only ONE alpha to
+ * write, so a smoothed glyph drawn into a canvas with transparency would either paint the average (which is grey
+ * coverage by another route, and the whole point lost) or write colour into a layer that will be composited
+ * somewhere else and fringe against whatever it lands on. Apple's rule is the same one: smoothing is for opaque
+ * destinations. SO A WINDOW'S SURFACE — made with `kCGImageAlphaNoneSkipFirst`, which is what an opaque window
+ * IS — gets it, and every offscreen image with an alpha channel does not, without a caller having to say so. */
+static int cg_font_smoothing(CGContextRef c)
+{
+	uint32_t alpha = c->bitmap_info & kCGBitmapAlphaInfoMask;
+
+	if (!c->allows_font_smoothing || !c->state.should_smooth_fonts) {
+		return 0;
+	}
+	if (!c->allows_antialiasing || !c->state.antialias) {
+		return 0;
+	}
+	return (alpha == kCGImageAlphaNone || alpha == kCGImageAlphaNoneSkipFirst
+		|| alpha == kCGImageAlphaNoneSkipLast) ? 1 : 0;
+}
+
+/* **A SMOOTHED GLYPH, COMPOSITED BY HAND BECAUSE PIXMAN CANNOT DO IT.** Every other paint in this file goes
+ * through `pixman_image_composite32`, and text cannot when it is smoothed: a mask there is `PIXMAN_a8`, ONE
+ * coverage applying to all three channels, and the whole point of sub-pixel coverage is that the three DIFFER —
+ * the destination has to be attenuated per channel, and no pixman operator says that. So the samples are walked
+ * directly, which is what every implementation of this does.
+ *
+ * **AND THE SAMPLES ARE ON A THIRD-OF-A-PIXEL GRID, WHICH `left` SAYS THE POSITION OF.** The destination's
+ * sub-columns are fixed to its pixels, so a bitmap whose first sample is not on a pixel boundary has to be
+ * entered part-way through the first pixel. THAT IS NOT A DETAIL: entering it at the boundary instead writes
+ * every channel from its NEIGHBOUR's coverage, and the glyph comes out tinted red on one side and blue on the
+ * other. The loop below is therefore over SAMPLES, and each one lands on the pixel and the CHANNEL that its own
+ * sub-column names. */
+static void cg_composite_glyph_smoothed(CGContextRef c, const unsigned char *bitmap, int nsamples,
+					int rows, int left, int dx, int dy)
+{
+	const int ro = (c->bitmap_info & kCGBitmapAlphaInfoMask) == kCGImageAlphaPremultipliedLast ? 0 : 2;
+	const int slot[3] = { ro, 1, 2 - ro };
+	double a = c->state.rgba[3] * c->state.alpha;
+	double colour[3];
+	const unsigned char *mbits = NULL;
+	int mstride = 0, mw = 0, mh = 0;
+	int row, sample;
+
+	colour[0] = c->state.rgba[0];
+	colour[1] = c->state.rgba[1];
+	colour[2] = c->state.rgba[2];
+	if (c->state.clip_mask != NULL) {
+		mbits = (const unsigned char *)pixman_image_get_data(c->state.clip_mask);
+		mstride = pixman_image_get_stride(c->state.clip_mask);
+		mw = pixman_image_get_width(c->state.clip_mask);
+		mh = pixman_image_get_height(c->state.clip_mask);
+	}
+	for (row = 0; row < rows; row++) {
+		const unsigned char *srow = bitmap + (size_t)row * (size_t)nsamples;
+		int y = dy + row;
+
+		if (y < 0 || y >= c->height) {
+			continue;
+		}
+		for (sample = 0; sample < nsamples; sample++) {
+			int sub = left + sample;
+			int column = (sub >= 0) ? (sub / 3) : -(((-sub) + 2) / 3);
+			int channel = sub - 3 * column;
+			int x = dx + column;
+			unsigned char *d;
+			double k, dst;
+
+			if (x < 0 || x >= c->width) {
+				continue;
+			}
+			if (!pixman_region32_contains_point(&c->state.clip, x, y, NULL)) {
+				continue;
+			}
+			k = a * (double)srow[sample] / 255.0;
+			if (mbits != NULL) {
+				/* A MASK IS ONE COVERAGE PER PIXEL, so it scales all three of that pixel's samples alike — and
+				 * a pixel outside the mask's own box reads as coverage 0, which is what a mask IS. */
+				int mx = x - c->state.clip_mask_x;
+				int my = y - c->state.clip_mask_y;
+
+				if (mx < 0 || my < 0 || mx >= mw || my >= mh) {
+					continue;
+				}
+				k *= (double)mbits[(size_t)my * (size_t)mstride + (size_t)mx] / 255.0;
+			}
+			if (k <= 0.0) {
+				continue;
+			}
+			d = c->data + (size_t)y * (size_t)c->stride + (size_t)x * 4u;
+			/* THE DESTINATION IS OPAQUE — that is the gate this path is entered under — so its bytes ARE its
+			 * colours and the blend is the ordinary one: dst = colour*k + dst*(1 - k), per channel. */
+			dst = (double)d[slot[channel]] / 255.0;
+			d[slot[channel]] = cg_blend_byte(colour[channel] * k + dst * (1.0 - k));
+		}
+	}
+}
+
 static void cg_show_one_glyph_fill(CGContextRef c, CGGlyph glyph, CGPoint pen, pixman_op_t op)
 {
 	unsigned char *coverage = NULL;
@@ -4989,6 +5118,11 @@ static void cg_show_one_glyph_fill(CGContextRef c, CGGlyph glyph, CGPoint pen, p
 	double a;
 	int w = 0, h = 0, left = 0, top = 0, dx, dy;
 	double advance = 0.0;
+	/* **SMOOTHING NEEDS THE ORDINARY `OVER` AND NOTHING ELSE**: the hand blend below knows one operator, and
+	 * every other mode (plus-darker, and the rest of pixman's) goes through the grey coverage it has always
+	 * used. That is a limit and it is stated rather than discovered. */
+	int smoothing = cg_font_smoothing(c) && op == PIXMAN_OP_OVER;
+	int samples = 1;
 
 	/* THE PEN, PLUS THE TEXT MATRIX'S TRANSLATION: the matrix's SCALE and ROTATION are already in
 	 * `linear` below (they rasterise the glyph), and its TRANSLATION is the one part that moves the
@@ -5005,8 +5139,8 @@ static void cg_show_one_glyph_fill(CGContextRef c, CGGlyph glyph, CGPoint pen, p
 	 * twice. WITH POSITIONING OFF THE FRACTION IS ZERO, which is what rounding the pen IS. */
 	fraction.x = cg_subpixel_positioning(c) ? device.x - (CGFloat)cg_glyph_pen(device.x) : 0.0;
 	fraction.y = cg_subpixel_positioning(c) ? device.y - (CGFloat)cg_glyph_pen(device.y) : 0.0;
-	if (!cg_font_render_glyph(c->state.font, glyph, c->state.font_size, linear, fraction,
-				  &coverage, &w, &h, &left, &top, &advance)) {
+	if (!cg_font_render_glyph(c->state.font, glyph, c->state.font_size, linear, fraction, smoothing,
+				  &coverage, &w, &h, &left, &top, &advance, &samples)) {
 		return;
 	}
 	if (w <= 0 || h <= 0) {
@@ -5014,8 +5148,16 @@ static void cg_show_one_glyph_fill(CGContextRef c, CGGlyph glyph, CGPoint pen, p
 		free(coverage);
 		return;
 	}
-	dx = cg_glyph_pen(device.x) + left;
+	dx = cg_glyph_pen(device.x);
 	dy = cg_glyph_pen(device.y) - top;
+	/* **THE ANSWER SAYS WHAT WAS RENDERED, NOT WHAT WAS ASKED FOR**: a glyph the engine could not turn comes
+	 * back grey, and it is blended as grey. */
+	if (samples == 3) {
+		cg_composite_glyph_smoothed(c, coverage, w, h, left, dx, dy);
+		free(coverage);
+		return;
+	}
+	dx += left;
 	/* THE MASK IS THE GLYPH'S OWN BOX, WHICH IS THE WHOLE POINT OF IT: `w` AND `h` COME BACK FROM THE
 	 * ENGINE, so both the mask and the composite can be the glyph's pixels rather than the surface's. The
 	 * first version built a FULL-SURFACE mask and composited the WHOLE SURFACE per glyph — 2.07M pixels of

@@ -33,6 +33,7 @@
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include FT_LCD_FILTER_H
 #include FT_SFNT_NAMES_H
 #include FT_TRUETYPE_TABLES_H
 
@@ -53,13 +54,23 @@ static int fn_library_ready;
 
 /* THE ENGINE, ONCE. A failure here is permanent for the process (a FreeType that cannot
  * initialise cannot initialise later either), so the flag records the ATTEMPT and every font
- * creation after it answers NULL rather than retrying. */
+ * creation after it answers NULL rather than retrying.
+ *
+ * **AND THE SUB-PIXEL FILTER IS TURNED ON HERE, BECAUSE THE ENGINE OFFERS IT AND DOES NOT APPLY IT.** An LCD
+ * bitmap is three samples per pixel, and without a filter the samples are the outline's own values — which is
+ * not what a display does with them: a monitor's three phosphors are convolved by the eye, and text rendered
+ * with raw sub-pixel coverage has colour fringes strong enough to read as coloured text. FreeType's
+ * `FT_LCD_FILTER_DEFAULT` is the five-tap FIR that does the convolving, and it is OPT-IN — a library that never
+ * asks for it gets the fringes. A build without sub-pixel rendering answers an error here, which is not a
+ * failure: the smoothing path is then never taken because no glyph comes back in colour. */
 static FT_Library fn_library(void)
 {
 	if (!fn_library_ready) {
 		fn_library_ready = 1;
 		if (FT_Init_FreeType(&fn_library_handle) != 0) {
 			fn_library_handle = NULL;
+		} else {
+			(void)FT_Library_SetLcdFilter(fn_library_handle, FT_LCD_FILTER_DEFAULT);
 		}
 	}
 	return fn_library_handle;
@@ -903,14 +914,15 @@ CGGlyph cg_font_glyph_with_name(CGFontRef font, const char *name)
 /* ------------------------------------------------------------------------- */
 
 int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size, CGAffineTransform matrix,
-			 CGPoint delta, unsigned char **coverage, int *width, int *height, int *left,
-			 int *top, double *advance)
+			 CGPoint delta, int smoothing, unsigned char **coverage, int *width, int *height,
+			 int *left, int *top, double *advance, int *samples)
 {
 	FT_Matrix m;
 	FT_Vector d;
 	FT_GlyphSlot slot;
 	unsigned char *buf;
 	int w, h, row, mirror = 0;
+	int per_pixel = 1;
 
 	if (font == NULL || font->face == NULL || coverage == NULL || width == NULL || height == NULL) {
 		return 0;
@@ -924,6 +936,15 @@ int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size, CGAf
 		fprintf(stderr, "CG-REFUSE: the engine would not set the font size (%.2f)\n",
 			(double)pixel_size);
 		return 0;
+	}
+	/* **A SMOOTHED GLYPH IS THREE SAMPLES ALONG ONE SCREEN AXIS, WHICH ONLY MEANS ANYTHING WHILE THE GLYPH'S OWN
+	 * VERTICALS ARE STILL VERTICAL ON THE SCREEN.** A rotation or a shear turns the sub-pixel axis away from the
+	 * destination's, and the three samples then describe a direction nobody is looking along — the fringe would
+	 * be a colour cast, not resolution. So a turned glyph falls back to grey coverage and says nothing, which is
+	 * what Apple's own renderer does with turned text. The gate is on the transform the glyph is RASTERISED
+	 * with — the text matrix composed with the CTM, which is what `matrix` is here. */
+	if (smoothing && (matrix.b != 0.0 || matrix.c != 0.0)) {
+		smoothing = 0;
 	}
 	/* A REFLECTION IS TAKEN OUT OF THE ENGINE'S MATRIX AND PUT BACK INTO THE ROWS, because a bitmap
 	 * context's CTM is flipped and handing that flip to FreeType makes it report bitmap_top = 0 for
@@ -951,16 +972,25 @@ int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size, CGAf
 	d.y = (FT_Pos)((mirror ? -delta.y : delta.y) * 64.0);
 	FT_Set_Transform(font->face, &m, &d);
 
-	if (FT_Load_Glyph(font->face, (FT_UInt)glyph, FT_LOAD_DEFAULT) != 0) {
+	/* **THE TARGET IS THE RENDERER'S HALF OF SMOOTHING, AND IT IS NOT ONLY A RENDER MODE.** `FT_LOAD_TARGET_LCD`
+	 * is what tells a font's own hinter that the grid it is fitting to is a THIRD of a pixel wide — asking for
+	 * `FT_RENDER_MODE_LCD` alone gets the colour bitmap drawn from outlines that were grid-fitted for a whole-pixel
+	 * grid, which is blurrier than the grey version it is supposed to improve on. */
+	if (FT_Load_Glyph(font->face, (FT_UInt)glyph, smoothing ? (FT_LOAD_DEFAULT | FT_LOAD_TARGET_LCD)
+							       : FT_LOAD_DEFAULT) != 0) {
 		fprintf(stderr, "CG-REFUSE: the engine would not load glyph %u\n", (unsigned)glyph);
 		return 0;
 	}
 	slot = font->face->glyph;
-	if (FT_Render_Glyph(slot, FT_RENDER_MODE_NORMAL) != 0) {
+	if (FT_Render_Glyph(slot, smoothing ? FT_RENDER_MODE_LCD : FT_RENDER_MODE_NORMAL) != 0) {
 		fprintf(stderr, "CG-REFUSE: the engine would not render glyph %u\n", (unsigned)glyph);
 		return 0;
 	}
-	if (slot->bitmap.pixel_mode != FT_PIXEL_MODE_GRAY) {
+	/* TWO COVERAGE FORMATS COME BACK AND BOTH ARE UNDERSTOOD: one sample per pixel, and — when smoothing was
+	 * asked for — three, one per sub-pixel column. Anything else is a face this library cannot place. */
+	if (slot->bitmap.pixel_mode == FT_PIXEL_MODE_LCD) {
+		per_pixel = 3;
+	} else if (slot->bitmap.pixel_mode != FT_PIXEL_MODE_GRAY) {
 		fprintf(stderr, "CG-REFUSE: this font renders glyph coverage this library cannot use "
 				"(pixel mode %d)\n", slot->bitmap.pixel_mode);
 		return 0;
@@ -984,8 +1014,16 @@ int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size, CGAf
 		       (size_t)w);
 	}
 	*coverage = buf;
+	/* **`*width` IS A COUNT OF SAMPLES AND NOT OF PIXELS**, and `*samples` says how many of them make a pixel —
+	 * which is the same statement `*left` is in: a smoothed bitmap's samples sit on a grid THREE TIMES finer than
+	 * the destination's, so the bearing comes back in thirds of a pixel, and the caller needs that fraction to
+	 * line the samples up with the destination's own sub-columns. One sample per pixel makes both of them the
+	 * plain whole-pixel numbers they have always been. */
 	*width = w;
 	*height = h;
+	if (samples != NULL) {
+		*samples = per_pixel;
+	}
 	if (left != NULL) {
 		*left = slot->bitmap_left;
 	}
