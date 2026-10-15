@@ -386,6 +386,121 @@ static int case_path(void)
 	return g_fail - before;
 }
 
+/* ------------------------------------------------------------------------ */
+/* the sweep, and the shapes a band has to be read at both ends of           */
+/* ------------------------------------------------------------------------ */
+
+/* A TRIANGLE FILLS AS A TRIANGLE, AND THIS CASE IS THE ONE THE SWEEP OWED.
+ *
+ * **THE SWEEP TOOK EACH TRAPEZOID'S TOP X OUT OF AN ARRAY THAT HOLDS THE BAND'S MIDDLE.** The x's it sorts by are
+ * read at the middle of a band ON PURPOSE -- a tie at a band's top is unresolvable and the middle is not -- and
+ * the trapezoid's own corners were then read back out of that same array, so EVERY shape's top edge came out as
+ * wide as its middle. A triangle is the shape that shows it: MEASURED before the fix, the one below painted 8
+ * points across its top row and 16 across its base, with the apex MISSING, and the mirrored triangle was wrong the
+ * other way -- 8 across and no base at all. A RECTANGLE IS BLIND TO IT, because its edges are vertical and its x
+ * is the same at every y, which is why every case that had been written down passed while triangles were broken.
+ *
+ * THE TWO CLAIMS ARE THE MIRROR AND THE TAPER, and neither is a pixel count for its own sake. The mirror is what
+ * the defect broke first -- one shape read its top from the middle and the other read its bottom the same way, so
+ * the two were wrong in opposite directions -- and the taper is what says the shape is a TRIANGLE rather than a
+ * trapezium whose top edge happens to be short.
+ */
+#define TRI_SIDE 24
+static unsigned char g_tri_buf[TRI_SIDE * TRI_SIDE * 4];
+
+/* Fills one triangle on a white ground and answers how many points it painted, with the width of the widest row
+ * and of the row at the FAR END from it. The buffer's rows count from the top and the vertices are given in user
+ * space, whose origin is the bottom left, so the row index is converted -- the same flip `pixel_lit` records. */
+static size_t tri_fill(double x0, double y0, double x1, double y1, double x2, double y2,
+		       int *base_w, int *tip_w)
+{
+	CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+	CGContextRef c;
+	CGMutablePathRef p;
+	size_t i, painted = 0;
+	int y, widest = 0, widest_y = -1, first_y = -1, last_y = -1;
+
+	memset(g_tri_buf, 0xff, sizeof g_tri_buf);
+	c = CGBitmapContextCreate(g_tri_buf, TRI_SIDE, TRI_SIDE, 8, TRI_SIDE * 4, rgb,
+				  kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+	CGColorSpaceRelease(rgb);
+	CGContextSetRGBFillColor(c, 0, 0, 0, 1);
+	p = CGPathCreateMutable();
+	CGPathMoveToPoint(p, NULL, x0, y0);
+	CGPathAddLineToPoint(p, NULL, x1, y1);
+	CGPathAddLineToPoint(p, NULL, x2, y2);
+	CGPathCloseSubpath(p);
+	CGContextAddPath(c, p);
+	CGContextFillPath(c);
+
+	for (i = 0; i < TRI_SIDE * TRI_SIDE; i++) {
+		if (g_tri_buf[i * 4 + 2] < 128) {	/* B,G,R,A: R is byte 2 */
+			painted++;
+		}
+	}
+	for (y = 0; y < TRI_SIDE; y++) {
+		size_t row = TRI_SIDE - 1 - y;
+		int x, w = 0;
+
+		for (x = 0; x < TRI_SIDE; x++) {
+			if (g_tri_buf[(row * TRI_SIDE + x) * 4 + 2] < 128) {
+				w++;
+			}
+		}
+		if (w > 0) {
+			if (first_y < 0) {
+				first_y = y;
+			}
+			last_y = y;
+			if (w > widest) {
+				widest = w;
+				widest_y = y;
+			}
+		}
+	}
+	if (base_w != NULL) {
+		*base_w = widest;
+	}
+	if (tip_w != NULL) {
+		/* the end AWAY from the widest row is the tip, whichever way round it is */
+		int tip_y = (widest_y - first_y) > (last_y - widest_y) ? first_y : last_y;
+		size_t row = TRI_SIDE - 1 - tip_y;
+		int x, w = 0;
+
+		for (x = 0; x < TRI_SIDE; x++) {
+			if (g_tri_buf[(row * TRI_SIDE + x) * 4 + 2] < 128) {
+				w++;
+			}
+		}
+		*tip_w = w;
+	}
+	CGPathRelease(p);
+	CGContextRelease(c);
+	return painted;
+}
+
+static int case_triangle_fill(void)
+{
+	int before = g_fail;
+	int up_base = 0, up_tip = 0, down_base = 0, down_tip = 0;
+	size_t up, down;
+
+	/* ONE TRIANGLE AND ITS MIRROR, reflected about y = 11.5: 16 points across the base and 16 tall. */
+	up = tri_fill(12, 20, 4, 4, 20, 4, &up_base, &up_tip);
+	down = tri_fill(12, 4, 4, 20, 20, 20, &down_base, &down_tip);
+
+	check(up_base == 16 && down_base == 16,
+	      "a triangle 16 points across its base fills %d and %d points across its widest row, want 16",
+	      up_base, down_base);
+	check(up_tip <= 4 && down_tip <= 4,
+	      "and the end away from the base is a TIP, %d and %d points, not an edge as wide as the middle",
+	      up_tip, down_tip);
+	check(up == down,
+	      "the triangle and its mirror paint the same pixels: %zu and %zu -- the defect made them differ",
+	      up, down);
+	return g_fail - before;
+}
+
 /* A FONT FROM BYTES, WHICH IS THE FORM THAT OPENS NO FILE BY NAME: a provider over a real file on this
  * machine, then the numbers a font must have. THE FILE IS CHECKED FOR FIRST AND ITS ABSENCE IS REPORTED
  * RATHER THAN COUNTED AS A PASS -- a case that quietly skips is a case that stops covering anything. */
@@ -2158,6 +2273,7 @@ static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	  case_consumer_and_gradient },
 	{ "A bitmap context whose fill reaches the pixels", case_bitmap_context_fill },
 	{ "A path: empty, contains, and its box", case_path },
+	{ "A triangle fills as a triangle, and its mirror mirrors it", case_triangle_fill },
 	{ "A font made from bytes", case_font_from_provider },
 	{ "A gradient painted into a context", case_gradient_into_context },
 	{ "An axial shading painted through a caller's function", case_axial_shading },

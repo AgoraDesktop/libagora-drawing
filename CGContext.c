@@ -2187,8 +2187,9 @@ static void cg_sweep(cg_flatten *fl, cg_traps *tr, int even_odd)
 		/* THE X IS TAKEN AT THE BAND'S MIDDLE, NOT ITS TOP — the second half of the crossing fix.
 		 * When a band's top IS a crossing, the two edges that meet there are TIED, and a tie resolved
 		 * at the top can come out either way, which would pair the wrong edges for the whole band. The
-		 * middle is unambiguous wherever the top is not. This changes the ORDER only: the trapezoid's
-		 * own x values are still taken at the top and the bottom. */
+		 * middle is unambiguous wherever the top is not. **AND IT IS FOR THE ORDER ONLY**, which is what
+		 * the sort below and the winding walk read: the trapezoid's own x values are taken at the band's
+		 * top and bottom, where the comment on `xa_top` says what reading them from here costs. */
 		n = na;
 		for (j = 0; j < n; j++) {
 			act[j].idx = erefs[active[j]].idx;
@@ -2213,8 +2214,16 @@ static void cg_sweep(cg_flatten *fl, cg_traps *tr, int even_odd)
 				const cg_edge *ea = &fl->edges[act[left].idx];
 				const cg_edge *eb = &fl->edges[act[j].idx];
 				pixman_trapezoid_t t;
-				double xa_top = act[left].x;
-				double xb_top = act[j].x;
+				/* **THE TRAPEZOID'S OWN X VALUES ARE TAKEN AT ITS OWN TOP AND BOTTOM, AND THE TOP ONE IS NOT
+				 * `act[].x`.** That array holds each edge's x at the band's MIDDLE, which exists for the ORDER —
+				 * a tie at a band's top is unresolvable, and the middle is not — and it is not the trapezoid's
+				 * shape. Reading the top x out of it made every shape's top edge as wide as its middle: MEASURED,
+				 * a triangle (12,20),(4,4),(20,4) came out 8 points wide across its top row and 16 across its base,
+				 * with the apex MISSING, and the mirrored triangle came out wrong the other way. A rectangle was
+				 * unaffected — its edges are vertical, so its x is the same at every y — which is why this
+				 * survived every case that had been written down. */
+				double xa_top = cg_edge_x_at(ea, yt);
+				double xb_top = cg_edge_x_at(eb, yt);
 				double xa_bot = cg_edge_x_at(ea, yb);
 				double xb_bot = cg_edge_x_at(eb, yb);
 
