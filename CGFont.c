@@ -112,7 +112,12 @@ static FT_Library fn_library(void)
  * list for every character the current face does not cover, and with EIGHT slots the walk evicted its own entries
  * before it could reuse them — so the directory was re-read for every character anyway, which is how the fuzz sweep
  * measured minutes per line even after misses were cached. MEASURED after this: a repeated miss is 0.0000 s. */
-#define FN_NAME_CACHE	64
+/* **AND IT IS SIZED FOR A WHOLE FONT SET RATHER THAN FOR A CASCADE.** A fallback search walks EVERY installed face —
+ * 154 of them on the machine this was measured on — asking each for a name, so a cache smaller than the set evicts its
+ * own entries and every search re-reads the directories. MEASURED: the sanitizer suite's hyphenation case ran for more
+ * than 280 seconds with this at 64 and finishes in seconds at 512, because the search touched more distinct names than
+ * the cache could hold. 512 entries is about 36 KB. */
+#define FN_NAME_CACHE	512
 
 static struct {
 	char name[64];
@@ -121,6 +126,17 @@ static struct {
 } fn_name_cache[FN_NAME_CACHE];
 static int fn_name_cache_next;
 static char fn_name_cache_env[1024];
+
+/* **AND A GENERATION FOR THE FONT SET**, so a caller in another layer can cache what the enumeration answers and know
+ * when to throw it away. THE SET CHANGES IN THREE PLACES — a registration, an unregistration, and `FN_FONT_PATH`
+ * changing under the process — and all three go through this counter, so a cache keyed on it cannot outlive the facts it
+ * was built from. Counting is the whole mechanism: a reader that sees a different number rebuilds, and one that sees the
+ * same number is right to reuse.
+ *
+ * `libagora-text`'s `CTFontMatchingCopyAvailableDescriptors` is the first reader, and the reason this exists: it walked
+ * the font directories — opening EVERY font file to read its names — on every call, which made per-character fallback
+ * cost a directory walk per character. */
+static unsigned long fn_registry_generation = 1;
 
 /* **AND THE CACHE IS EMPTIED IN TWO CASES RATHER THAN ONE**: the search path changing (the probe's door), and
  * the REGISTRY changing (CT-M7h) — because a name that resolved before a registration, or after an
@@ -146,8 +162,17 @@ static void fn_name_cache_note_env(void)
 
 	if (strcmp(now, fn_name_cache_env) != 0) {
 		fn_name_cache_flush();
+		fn_registry_generation++;
 		snprintf(fn_name_cache_env, sizeof fn_name_cache_env, "%s", now);
 	}
+}
+
+/* **THE DOOR ITSELF**, after the environment watch it depends on: asking for the generation also NOTICES an `FN_FONT_PATH`
+ * change, so a reader that only ever asks this question still sees the font set move when the search path does. */
+unsigned long cg_font_registry_generation(void)
+{
+	fn_name_cache_note_env();
+	return fn_registry_generation;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -206,8 +231,11 @@ int cg_font_register(const char *path)
 		return -1;
 	}
 	fn_registered_count++;
-	/* A REGISTRATION CHANGES WHAT A NAME RESOLVES TO, so nothing the cache learned before it survives. */
+	/* A REGISTRATION CHANGES WHAT A NAME RESOLVES TO, so nothing the cache learned before it survives — and the
+	 * GENERATION moves with it, so a cache in a layer above rebuilds rather than remembering a list without this file in
+	 * it. */
 	fn_name_cache_flush();
+	fn_registry_generation++;
 	return 1;
 }
 
@@ -224,6 +252,7 @@ int cg_font_unregister(const char *path)
 	}
 	fn_registered_count--;
 	fn_name_cache_flush();
+	fn_registry_generation++;
 	return 1;
 }
 

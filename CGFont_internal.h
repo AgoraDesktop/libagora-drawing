@@ -117,6 +117,11 @@ CGFontRef cg_font_create_with_name(const char *name);
 typedef void (*cg_font_visit)(void *info, const char *path);
 void cg_font_enumerate(cg_font_visit visit, void *info);
 
+/* **AND A NUMBER THAT CHANGES WHEN THE FONT SET DOES**, so a caller that wants to cache what `cg_font_enumerate` answers
+ * can tell whether its copy is still true. It moves on a registration, an unregistration, and `FN_FONT_PATH` changing —
+ * the three things this file knows of that change which faces exist — and it never moves back. */
+unsigned long cg_font_registry_generation(void);
+
 /* **THE PROCESS'S REGISTERED FONTS (CT-M7h).** `CTFontManagerRegisterFontsForURL` adds a font FILE to the
  * process's registry, and the two doors above have to see it — that is what makes a registered font
  * *discoverable* rather than merely remembered. So the registry lives HERE, beside the directory list it joins,
