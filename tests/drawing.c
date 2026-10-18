@@ -34,6 +34,8 @@
 #include <CoreGraphics/CGFunction.h>
 #include <CoreGraphics/CGGradient.h>
 #include <CoreGraphics/CGImage.h>
+#include <CoreGraphics/CGImageDestination.h>
+#include <CoreGraphics/CGDataProvider_internal.h>
 #include <CoreGraphics/CGLayer.h>
 #include <CoreGraphics/CGPath.h>
 #include <CoreGraphics/CGPattern.h>
@@ -2265,6 +2267,154 @@ static int case_destination_channel_order(void)
 	return g_fail - before;
 }
 
+/* **WRITING AN IMAGE OUT, WHICH IS THE DOOR THE APPKIT NAMED.** The encoder is `cg_image_png_data`
+ * (`CGImagePNG.c`, beside the decoder) and `CGImageDestination` is the object Apple documents around it; what this
+ * case measures is the ROUND TRIP, because that is the only thing that proves the two halves agree: an image is
+ * written, the bytes are read back through this library's own PNG decoder, and the pixels are compared.
+ *
+ * **AND THE PIXELS ARE CHOSEN TO CATCH THE ONE CONVERSION THAT IS EASY TO GET WRONG.** This library stores
+ * PREMULTIPLIED alpha and PNG stores STRAIGHT alpha, so the encoder has to divide and the decoder has to multiply;
+ * a semi-transparent pixel is the only thing that notices. The opaque pixel is exact to the byte, and the
+ * semi-transparent one is allowed one step either way, because the two roundings are each to nearest and do not have
+ * to land on the number that went in.
+ *
+ * **AND THE REFUSALS ARE PART OF THE CASE**, because a destination that accepted `public.jpeg` and wrote a PNG is
+ * the kind of wrong answer a round trip cannot see: the type is checked at creation, a second image is refused, and
+ * finalizing twice is refused with the destination still holding what it had. */
+static int case_image_destination_png(void)
+{
+	static const unsigned char kPixels[] = {
+		/* BGRA, PREMULTIPLIED — the layout the PNG decoder produces and the blitter reads. */
+		0x00, 0x00, 0xFF, 0xFF,	/* opaque red */
+		0x00, 0xFF, 0x00, 0xFF,	/* opaque green */
+		0x19, 0x32, 0x64, 0x80,	/* straight (200,100,50) at alpha 128, premultiplied */
+		0xFF, 0xFF, 0xFF, 0x00	/* fully transparent */
+	};
+	CGDataProviderRef provider;
+	CGImageRef image;
+	CGImageRef back;
+	CFMutableDataRef data;
+	CGImageDestinationRef idst;
+	CGDataProviderRef readBack;
+	CFArrayRef types;
+	const unsigned char *bytes;
+	size_t length;
+	bool made;
+
+	provider = CGDataProviderCreateWithData(NULL, kPixels, sizeof kPixels, NULL);
+	check(provider != NULL, "the pixel provider was made");
+	if (provider == NULL) {
+		return g_fail;
+	}
+	image = CGImageCreate(2, 2, 8, 32, 8, CGColorSpaceCreateDeviceRGB(),
+			      kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little, provider, NULL, true,
+			      kCGRenderingIntentDefault);
+	CGDataProviderRelease(provider);
+	check(image != NULL, "the source image was made from those pixels");
+	if (image == NULL) {
+		return g_fail;
+	}
+
+	/* WHAT THIS BUILD SAYS IT WRITES, WHICH IS THE HONEST ANSWER TO "WHAT CAN I ASK FOR". */
+	types = CGImageDestinationCopyTypeIdentifiers();
+	check(types != NULL && CFArrayGetCount(types) == 1
+	      && CFEqual(CFArrayGetValueAtIndex(types, 0), CFSTR("public.png")),
+	      "the destination writes public.png and says so");
+	if (types != NULL) {
+		CFRelease(types);
+	}
+
+	/* AND A TYPE IT DOES NOT WRITE IS REFUSED AT CREATION, not after the images have been added. */
+	data = CFDataCreateMutable(kCFAllocatorDefault, 0);
+	check(data != NULL, "the mutable data was made");
+	idst = CGImageDestinationCreateWithData(data, CFSTR("public.jpeg"), 1, NULL);
+	check(idst == NULL, "a destination asked for public.jpeg is refused rather than writing a PNG");
+
+	idst = (data != NULL) ? CGImageDestinationCreateWithData(data, CFSTR("public.png"), 1, NULL) : NULL;
+	check(idst != NULL, "a destination for public.png was made");
+	if (idst != NULL) {
+		CGImageDestinationAddImage(idst, image, NULL);
+		check(CGImageDestinationFinalize(idst), "the image was written");
+		bytes = (const unsigned char *)CFDataGetBytePtr(data);
+		length = (size_t)CFDataGetLength(data);
+		check(length > 8 && bytes != NULL && bytes[0] == 0x89 && bytes[1] == 'P' && bytes[2] == 'N'
+		      && bytes[3] == 'G',
+		      "and the bytes begin with the PNG signature (%zu of them)", length);
+
+		/* **THE SECOND FINALIZE IS REFUSED**, because appending the image to its own output is what an
+		 * over-helpful encoder does and it corrupts the file rather than failing. */
+		check(!CGImageDestinationFinalize(idst), "a second finalize is refused");
+
+		/* AND THE ROUND TRIP, through this library's own decoder. */
+		readBack = (length > 0) ? CGDataProviderCreateWithData(NULL, bytes, length, NULL) : NULL;
+		back = (readBack != NULL)
+			? CGImageCreateWithPNGDataProvider(readBack, NULL, true, kCGRenderingIntentDefault) : NULL;
+		check(back != NULL, "the bytes decode back into an image");
+		if (back != NULL) {
+			CGDataProviderRef decoded = CGImageGetDataProvider(back);
+			size_t decodedLength = 0;
+			const unsigned char *p = (const unsigned char *)cg_dataprovider_bytes(decoded, &decodedLength);
+
+			check(CGImageGetWidth(back) == 2 && CGImageGetHeight(back) == 2 && p != NULL
+			      && decodedLength == 16,
+			      "at the same size and in the same layout (%zux%zu, %zu bytes)",
+			      CGImageGetWidth(back), CGImageGetHeight(back), decodedLength);
+			if (p != NULL && decodedLength == 16) {
+				/* BGRA in memory, and the decoder has premultiplied again. */
+				check(p[0] == 0x00 && p[1] == 0x00 && p[2] == 0xFF && p[3] == 0xFF,
+				      "the opaque red pixel survives exactly (%02X %02X %02X %02X)", p[0], p[1],
+				      p[2], p[3]);
+				check(p[4] == 0x00 && p[5] == 0xFF && p[6] == 0x00 && p[7] == 0xFF,
+				      "the opaque green pixel survives exactly (%02X %02X %02X %02X)", p[4], p[5],
+				      p[6], p[7]);
+				check(p[8] + 1 >= 0x19 && p[8] <= 0x19 + 1 && p[9] + 1 >= 0x32 && p[9] <= 0x32 + 1
+				      && p[10] + 1 >= 0x64 && p[10] <= 0x64 + 1 && p[11] == 0x80,
+				      "and the SEMI-TRANSPARENT pixel comes back within one step of where it "
+				      "started (%02X %02X %02X %02X, was 19 32 64 80)", p[8], p[9], p[10], p[11]);
+				printf("  (encoded %zu bytes for a 2x2 image; semi-transparent pixel %02X %02X %02X %02X)\n",
+				       length, p[8], p[9], p[10], p[11]);
+			}
+			CGImageRelease(back);
+		}
+		if (readBack != NULL) {
+			CGDataProviderRelease(readBack);
+		}
+		CFRelease(idst);
+	}
+
+	/* AND THE FILE DOOR, which is the same encoder with a name to write to. */
+	if (data != NULL) {
+		CFURLRef url = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, CFSTR("/tmp/agora-destination.png"),
+							     kCFURLPOSIXPathStyle, false);
+
+		check(url != NULL, "the file URL was made");
+		if (url != NULL) {
+			idst = CGImageDestinationCreateWithURL(url, CFSTR("public.png"), 1, NULL);
+
+			made = (idst != NULL);
+			if (idst != NULL) {
+				CGImageDestinationAddImage(idst, image, NULL);
+				made = CGImageDestinationFinalize(idst);
+				CFRelease(idst);
+			}
+			check(made, "and a destination over a URL writes the file");
+			if (made) {
+				FILE *file = fopen("/tmp/agora-destination.png", "rb");
+
+				check(file != NULL, "the file exists");
+				if (file != NULL) {
+					fclose(file);
+					remove("/tmp/agora-destination.png");
+				}
+			}
+			CFRelease(url);
+		}
+		CFRelease(data);
+	}
+	CGImageRelease(image);
+	return g_fail;
+}
+
 static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "The colour spaces this library answers, by name", case_named_spaces },
 	{ "The type-id table's two promises", case_type_ids },
@@ -2278,6 +2428,7 @@ static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	{ "A gradient painted into a context", case_gradient_into_context },
 	{ "An axial shading painted through a caller's function", case_axial_shading },
 	{ "Images decoded from PNG and JPEG files, then drawn", case_images_from_data },
+	{ "An image written to PNG and read back, and the refusals beside it", case_image_destination_png },
 	{ "A radial shading, and that swapping its circles swaps the ramp", case_radial_shading },
 	{ "The radial degenerate cases, and the two refusals", case_radial_degenerate_and_refusals },
 	{ "The radial gradient and the radial shading are one ramp", case_radial_gradient_matches_the_shading },

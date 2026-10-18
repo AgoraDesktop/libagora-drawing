@@ -38,11 +38,13 @@
 #include <CoreGraphics/CGDataProvider_internal.h>
 #include <CoreGraphics/CGImage.h>
 #include <CoreGraphics/CGImage_internal.h>
+#include <CoreGraphics/CGDataProvider_internal.h>
 
 #include <png.h>
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* `CGDataProviderCreateWithData` takes (info, data, size), and `free` has no such shape, so the
  * buffer gets one line of glue. It runs on the LAST release of the provider, which is what makes
@@ -154,5 +156,128 @@ CGImageRef CGImageCreateWithPNGDataProvider(CGDataProviderRef provider, const CG
 			       kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little, output,
 			       NULL, shouldInterpolate, intent);
 	CGDataProviderRelease(output);
+	return result;
+}
+
+/* =================================================================================================
+ * THE OTHER DIRECTION: AN IMAGE BECOMES PNG BYTES.
+ * =============================================================================================== */
+/* **THE SAME SIMPLIFIED API WRITES AS READS, WHICH IS WHY THIS IS THE SAME FILE.** `png_image_write_to_memory` takes
+ * a buffer of 8-bit samples in a named layout, so the whole job is turning the image's own layout into one —
+ * and that matrix is `cg_image_layout`'s, not a second copy of it: the encoder asks where the channels are exactly
+ * as the blitter does, so a chart this library can DRAW is a chart it can write.
+ *
+ * **AND THE ALPHA HAS TO BE UN-PREMULTIPLIED, BECAUSE THIS LIBRARY DOES NOT STORE WHAT PNG STORES.** The decoder
+ * above premultiplies for the same reason, and the inverse is rounded to nearest rather than truncated: a truncating
+ * divide darkens every semi-transparent pixel by up to one 8-bit step, which is measurable and which the round-trip
+ * test in `tests/drawing.c` measures.
+ *
+ * **AND THE OUTPUT IS ALWAYS RGBA.** An image with no alpha writes 255 into it; that costs a channel and is the
+ * honest simple thing, because the alternative is a second format decision that would have to agree with the
+ * decoder's. */
+CFDataRef cg_image_png_data(CGImageRef image)
+{
+	png_image png;
+	CGDataProviderRef provider;
+	const void *bytes;
+	size_t length = 0;
+	size_t width;
+	size_t height;
+	size_t bytesPerRow;
+	size_t stored = 0;
+	int straight = 0;
+	int map[4];
+	unsigned char *rgba;
+	size_t count;
+	size_t i;
+	void *memory = NULL;
+	png_alloc_size_t memorySize = 0;
+	CFDataRef result;
+
+	if (image == NULL) {
+		fprintf(stderr, "CG-REFUSE: cg_image_png_data needs an image\n");
+		return NULL;
+	}
+	provider = CGImageGetDataProvider(image);
+	bytes = (provider != NULL) ? cg_dataprovider_bytes(provider, &length) : NULL;
+	width = CGImageGetWidth(image);
+	height = CGImageGetHeight(image);
+	bytesPerRow = CGImageGetBytesPerRow(image);
+	if (bytes == NULL || width == 0 || height == 0) {
+		fprintf(stderr, "CG-REFUSE: cg_image_png_data cannot read this image's pixels\n");
+		return NULL;
+	}
+	if (CGImageGetBitsPerComponent(image) != 8) {
+		fprintf(stderr, "CG-REFUSE: cg_image_png_data writes 8-bit samples and this image has %zu-bit "
+				"ones; scaling them would lose the caller's data\n",
+			CGImageGetBitsPerComponent(image));
+		return NULL;
+	}
+	cg_image_layout(CGImageGetColorSpace(image), CGImageGetAlphaInfo(image),
+			CGImageGetBitmapInfo(image) & ~0x1fu, map, (int *)&stored, &straight);
+	if (stored == 0 || stored > 4) {
+		fprintf(stderr, "CG-REFUSE: cg_image_png_data cannot read this image's channel layout\n");
+		return NULL;
+	}
+	count = width * height;
+	rgba = (unsigned char *)malloc(count * 4u);
+	if (rgba == NULL) {
+		return NULL;
+	}
+	for (i = 0; i < count; i++) {
+		const unsigned char *p = (const unsigned char *)bytes + (i / width) * bytesPerRow
+					 + (i % width) * stored;
+		unsigned int a = (map[3] >= 0) ? p[map[3]] : 255u;
+		unsigned int b = (map[0] >= 0) ? p[map[0]] : 0u;
+		unsigned int g = (map[1] >= 0) ? p[map[1]] : 0u;
+		unsigned int r = (map[2] >= 0) ? p[map[2]] : 0u;
+
+		if (!straight && a != 255u) {
+			if (a == 0u) {
+				b = g = r = 0u;
+			} else {
+				b = (b * 255u + a / 2u) / a;
+				g = (g * 255u + a / 2u) / a;
+				r = (r * 255u + a / 2u) / a;
+				if (b > 255u) { b = 255u; }
+				if (g > 255u) { g = 255u; }
+				if (r > 255u) { r = 255u; }
+			}
+		}
+		rgba[i * 4u + 0u] = (unsigned char)r;
+		rgba[i * 4u + 1u] = (unsigned char)g;
+		rgba[i * 4u + 2u] = (unsigned char)b;
+		rgba[i * 4u + 3u] = (unsigned char)a;
+	}
+
+	memset(&png, 0, sizeof png);
+	png.version = PNG_IMAGE_VERSION;
+	png.width = (png_uint_32)width;
+	png.height = (png_uint_32)height;
+	png.format = PNG_FORMAT_RGBA;
+	/* A NULL BUFFER IS HOW LIBPNG IS ASKED HOW MUCH ROOM THE RESULT NEEDS; it answers the size and writes nothing. */
+	if (png_image_write_to_memory(&png, NULL, &memorySize, 0, rgba, 0, NULL) == 0 || memorySize == 0) {
+		fprintf(stderr, "CG-REFUSE: cg_image_png_data could not size the PNG (%s)\n", png.message);
+		png_image_free(&png);
+		free(rgba);
+		return NULL;
+	}
+	memory = malloc((size_t)memorySize);
+	if (memory == NULL) {
+		png_image_free(&png);
+		free(rgba);
+		return NULL;
+	}
+	if (png_image_write_to_memory(&png, memory, &memorySize, 0, rgba, 0, NULL) == 0) {
+		fprintf(stderr, "CG-REFUSE: cg_image_png_data could not encode the PNG (%s)\n", png.message);
+		png_image_free(&png);
+		free(memory);
+		free(rgba);
+		return NULL;
+	}
+	png_image_free(&png);
+	free(rgba);
+	result = CFDataCreate(kCFAllocatorDefault, (const UInt8 *)memory, (CFIndex)memorySize);
+	free(memory);
 	return result;
 }

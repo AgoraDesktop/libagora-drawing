@@ -39,4 +39,11 @@ const CGFloat *cg_image_masking_colors(CGImageRef image, int *count);
 void cg_image_layout(CGColorSpaceRef space, CGImageAlphaInfo alpha, uint32_t order,
 		     int map[4], int *stored, int *straight);
 
+/* **AND THE IMAGE AS PNG BYTES, WHICH THE WRITE SIDE ASKS FOR AND NOTHING ELSE DOES.** It lives in
+ * `CGImagePNG.c`, beside the decoder, so that the library has ONE place that knows what a PNG is — and it reads the
+ * pixels through `cg_image_layout` above rather than a second matrix of its own, so the image the encoder writes is
+ * the image the blitter draws. The answer is a NEW `CFDataRef` the caller owns, or NULL with a `CG-REFUSE` line
+ * naming the layout it could not read. */
+CFDataRef cg_image_png_data(CGImageRef image);
+
 #endif /* CORE_GRAPHICS_CGIMAGE_INTERNAL_H */
