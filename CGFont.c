@@ -108,11 +108,16 @@ static FT_Library fn_library(void)
  * that flips it between calls sees the directory it just asked for. And there are no locks: this library has
  * none anywhere, and a registry read by two threads at once is the same question its FreeType handle already
  * answers. */
-#define FN_NAME_CACHE	8
+/* **AND IT IS BIG ENOUGH FOR A CASCADE RATHER THAN FOR ONE NAME.** A per-character font fallback walks the cascade
+ * list for every character the current face does not cover, and with EIGHT slots the walk evicted its own entries
+ * before it could reuse them — so the directory was re-read for every character anyway, which is how the fuzz sweep
+ * measured minutes per line even after misses were cached. MEASURED after this: a repeated miss is 0.0000 s. */
+#define FN_NAME_CACHE	64
 
 static struct {
 	char name[64];
 	CGFontRef font;
+	bool known;		/* the name has been ANSWERED for, whether the answer was a font or nothing */
 } fn_name_cache[FN_NAME_CACHE];
 static int fn_name_cache_next;
 static char fn_name_cache_env[1024];
@@ -129,6 +134,7 @@ static void fn_name_cache_flush(void)
 			CGFontRelease(fn_name_cache[i].font);
 			fn_name_cache[i].font = NULL;
 		}
+		fn_name_cache[i].known = false;
 	}
 	fn_name_cache_next = 0;
 }
@@ -227,11 +233,34 @@ static CGFontRef fn_name_cache_get(const char *name)
 	int i;
 
 	for (i = 0; i < FN_NAME_CACHE; i++) {
-		if (fn_name_cache[i].font != NULL && strcmp(fn_name_cache[i].name, name) == 0) {
-			return CGFontRetain(fn_name_cache[i].font);
+		if (fn_name_cache[i].known && strcmp(fn_name_cache[i].name, name) == 0) {
+			return (fn_name_cache[i].font != NULL) ? CGFontRetain(fn_name_cache[i].font) : NULL;
 		}
 	}
 	return NULL;
+}
+
+/* **AND A NAME THAT IS NOT THERE IS AN ANSWER TOO.** The miss was the expensive one: a name that resolves to nothing
+ * walked the whole font directory — 25 ms on the machine this was measured on — and NOTHING CACHED IT, so every
+ * caller asked again and walked again. A per-character font fallback (Core Text asks `CTFontCreateForString` once per
+ * character, so that substitution stays minimal) therefore cost a directory walk per character that no installed face
+ * covers, and a line of 512 odd characters took THIRTEEN SECONDS — which is what the fuzz sweep found, as a hang
+ * rather than as a wrong answer. MEASURED after this: a repeated miss is 0.0000 s, like a repeated hit.
+ *
+ * AND IT IS THE CACHE'S OWN CONTRACT THAT MAKES IT SAFE: the two things that can make a name resolve differently, a
+ * REGISTRATION and `FN_FONT_PATH`, both FLUSH this cache already, so an entry cannot outlive the fact it records
+ * except by a font file appearing in a watched directory behind this library's back — which is the same staleness a
+ * cached HIT already carries. */
+static bool fn_name_cache_missed(const char *name)
+{
+	int i;
+
+	for (i = 0; i < FN_NAME_CACHE; i++) {
+		if (fn_name_cache[i].known && strcmp(fn_name_cache[i].name, name) == 0 && fn_name_cache[i].font == NULL) {
+			return true;
+		}
+	}
+	return false;
 }
 
 static void fn_name_cache_put(const char *name, CGFontRef font)
@@ -248,7 +277,8 @@ static void fn_name_cache_put(const char *name, CGFontRef font)
 		CGFontRelease(fn_name_cache[slot].font);
 	}
 	snprintf(fn_name_cache[slot].name, sizeof fn_name_cache[slot].name, "%s", name);
-	fn_name_cache[slot].font = CGFontRetain(font);
+	fn_name_cache[slot].font = (font != NULL) ? CGFontRetain(font) : NULL;
+	fn_name_cache[slot].known = true;
 }
 
 CGFontRef CGFontCreateWithDataProvider(CGDataProviderRef provider)
@@ -1292,6 +1322,9 @@ CGFontRef cg_font_create_with_name(const char *name)
 		if (cached != NULL) {
 			return cached;
 		}
+		if (fn_name_cache_missed(name)) {
+			return NULL;	/* asked and answered: nothing by this name is installed */
+		}
 	}
 	{
 		/* THE OVERRIDE IS THE PROBE'S DOOR IN, AND THE ONLY WAY TO SEARCH ELSEWHERE: this library has no
@@ -1350,6 +1383,8 @@ CGFontRef cg_font_create_with_name(const char *name)
 		/* THE CACHE TAKES A REFERENCE OF ITS OWN AND THE CALLER STILL GETS ITS +1: this door Creates, and a font
 		 * that came from the cache is no exception to that. */
 		fn_name_cache_put(name, best);
+	} else {
+		fn_name_cache_put(name, NULL);	/* AND THE MISS IS THE ENTRY THAT PAYS FOR ITSELF */
 	}
 	return best;
 }
