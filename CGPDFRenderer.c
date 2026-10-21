@@ -674,19 +674,12 @@ static void fn_paint(fn_render *r, int mode, bool close)
 
 typedef struct fn_outline_sink_ctx {
 	CGContextRef ctx;
-	int points;
-	double first_x, first_y;
 } fn_outline_sink_ctx;
 
 static void fn_outline_move(void *info, CGFloat x, CGFloat y)
 {
 	fn_outline_sink_ctx *ctx = info;
 
-	if (ctx->points == 0) {
-		ctx->first_x = x;
-		ctx->first_y = y;
-	}
-	ctx->points++;
 	CGContextMoveToPoint(ctx->ctx, x, y);
 }
 
@@ -728,6 +721,7 @@ static void fn_show_one(fn_render *r, const unsigned char *bytes, size_t length)
 	int code_bytes;
 	size_t at = 0;
 	bool drew = false;
+	fn_outline_sink_ctx sink_ctx = { r->ctx };
 
 	if (font == NULL) {
 		/* TEXT WITH NO FONT IS NOT DRAWN, and the reason is the Tf operator's absence, not this string's. */
@@ -752,8 +746,6 @@ static void fn_show_one(fn_render *r, const unsigned char *bytes, size_t length)
 			CGAffineTransform glyph_matrix;
 
 			if (r->state.render_mode != 3 && r->state.render_mode != 7 && glyph != 0) {
-				fn_outline_sink_ctx sink_ctx = { r->ctx, 0, 0, 0 };
-
 				glyph_matrix = CGAffineTransformConcat(
 					CGAffineTransformConcat(
 						CGAffineTransformMakeScale(r->state.hscale, 1.0),

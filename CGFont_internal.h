@@ -166,6 +166,14 @@ int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size,
  * The public `CGFontGetGlyphsForUnichars` is still owed; this is the primitive it will be built on. */
 CGGlyph cg_font_glyph_for_unichar(CGFontRef font, unsigned unichar);
 
+/* **A CODE IN THE FACE'S OWN BUILT-IN ENCODING — which for a Type 1 font is NOT its Unicode char map.** FreeType
+ * synthesises a Unicode char map from a Type 1 face's glyph names, and that map is what `cg_font_glyph_for_unichar`
+ * reads; a TeX font's built-in encoding puts `ff`, `fi`, `fl`, `ffi` and `ffl` in the low slots, so asking the
+ * Unicode map about code 12 finds nothing while the font's own Adobe encoding names a ligature there. This door
+ * asks the Adobe charmaps FreeType exposes for exactly this, restores the caller's char map, and answers
+ * `kCGFontIndexInvalid` when no such map exists (a TrueType face has none, and its codes go through the cmap). */
+CGGlyph cg_font_glyph_for_code(CGFontRef font, unsigned code);
+
 /* **THE PAIR ADJUSTMENT BETWEEN TWO GLYPHS, IN FONT UNITS, OR ZERO.** This is the `kern` table, which is what a
  * font's typographer wrote about specific pairs — `To`, `AV`, `P.` — as opposed to the per-glyph advance every
  * other door here answers. It exists because a LINE has to apply it: Core Text's typesetting kerns, and without

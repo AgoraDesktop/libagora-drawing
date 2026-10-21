@@ -1045,6 +1045,37 @@ CGGlyph cg_font_glyph_for_unichar(CGFontRef font, unsigned unichar)
 	return (CGGlyph)index;
 }
 
+CGGlyph cg_font_glyph_for_code(CGFontRef font, unsigned code)
+{
+	static const FT_Encoding encodings[] = {
+		FT_ENCODING_ADOBE_CUSTOM, FT_ENCODING_ADOBE_STANDARD, FT_ENCODING_ADOBE_EXPERT
+	};
+	FT_CharMap saved;
+	CGGlyph result = (CGGlyph)kCGFontIndexInvalid;
+	size_t i;
+
+	if (font == NULL || font->face == NULL) {
+		return result;
+	}
+	saved = font->face->charmap;
+	for (i = 0; i < sizeof encodings / sizeof encodings[0]; i++) {
+		FT_UInt index;
+
+		if (FT_Select_Charmap(font->face, encodings[i]) != 0) {
+			continue;
+		}
+		index = FT_Get_Char_Index(font->face, (FT_ULong)code);
+		if (index != 0) {
+			result = (CGGlyph)index;
+			break;
+		}
+	}
+	if (saved != NULL) {
+		FT_Set_Charmap(font->face, saved);
+	}
+	return result;
+}
+
 /* ------------------------------------------------------------------------- */
 /* Rasterisation: the one door that asks the engine for pixels                */
 /* ------------------------------------------------------------------------- */

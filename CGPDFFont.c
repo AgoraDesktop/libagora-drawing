@@ -343,7 +343,7 @@ static CGGlyph fn_glyph_named(cg_pdf_font *font, const char *name)
 /* ------------------------------------------------------------------------- */
 
 static void fn_resolve_simple(cg_pdf_font *font, cg_pdf_doc *doc, cg_pdf_obj *dict, cg_pdf_obj *descriptor,
-			      bool truetype)
+			      bool truetype, bool builtin_encoding)
 {
 	const char *difference[256];
 	const char *base_encoding = NULL;
@@ -393,6 +393,17 @@ static void fn_resolve_simple(cg_pdf_font *font, cg_pdf_doc *doc, cg_pdf_obj *di
 
 		if (difference[i] != NULL) {
 			glyph = fn_glyph_named(font, difference[i]);
+		} else if (builtin_encoding) {
+			/* **A TYPE 1 FONT WITH NO /Encoding CARRIES ITS OWN.** The code is a slot in the program's
+			 * built-in encoding — TeX's text encoding puts its ligatures where a StandardEncoding reader
+			 * expects other letters — so the engine's char map is asked about the CODE, which for a
+			 * Type 1 face is that encoding. MEASURED on quilt.pdf: reading these through StandardEncoding
+			 * drew `efficient` with a breve over the e, because the code that means `ffi` here means
+			 * something else there. */
+			glyph = cg_font_glyph_for_code(font->cg, (unsigned)i);
+			if (glyph == (CGGlyph)kCGFontIndexInvalid) {
+				glyph = 0;
+			}
 		} else {
 			unsigned unicode = fn_encoding_is(base_encoding, "WinAnsiEncoding")
 						 ? fn_winansi_unicode((unsigned)i)
@@ -617,8 +628,10 @@ cg_pdf_font *cg_pdf_font_create(cg_pdf_doc *doc, cg_pdf_obj *font_dict)
 	}
 	if (!cid) {
 		bool truetype = fn_encoding_is(subtype_name, "TrueType");
+		bool builtin = cg_pdf_dict_get(doc, font_dict, "Encoding") == NULL && !truetype &&
+			       (fn_encoding_is(subtype_name, "Type1") || fn_encoding_is(subtype_name, "MMType1"));
 
-		fn_resolve_simple(font, doc, font_dict, descriptor, truetype);
+		fn_resolve_simple(font, doc, font_dict, descriptor, truetype, builtin);
 	}
 	return font;
 }
