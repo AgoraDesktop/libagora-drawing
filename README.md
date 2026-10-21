@@ -58,6 +58,21 @@ inherited box, a UTF-16BE title, a PDF date and two filtered streams, and a 1.5 
 object stream — every structural door asserted, both fixtures reopened from a file URL, and the scanner's five
 callbacks checked operand by operand.
 
+**AND A PDF PAGE DRAWS: PATHS, COLOUR, TEXT, IMAGES, FORMS AND SHADINGS.** `CGContextDrawPDFPage` installs an
+operator table over the content-stream scanner and turns each operator into the matching Core Graphics call, so a
+page is drawn in its OWN user space (`CGPDFPageGetDrawingTransform` fits and rotates it). Text is drawn as glyph
+OUTLINES through `cg_font_glyph_outline` — a PDF's positioning is not Core Text's, and filling the outline is what
+the text-showing operators mean — which also makes the render modes (fill, stroke, clip) one path operation each.
+Fonts come from the embedded /FontFile, /FontFile2 or /FontFile3 program through FreeType, with the `ABCDEF+`
+subset tag stripped and the standard fourteen falling back by name; /Encoding is a base table plus /Differences,
+and Identity-H CID fonts read /CIDToGIDMap and /W. Colour is converted to RGB once, including /ICCBased through
+little CMS, /Indexed, /Separation and /DeviceN tint transforms, and the CalRGB and Lab formulas. Images are DCT
+through the JPEG decoder or raw samples converted per colour space; form XObjects recurse with their /Matrix and
+/BBox; axial and radial shadings sample their function into a gradient. MEASURED (tests/pdf.c, one page): a
+DeviceRGB rectangle at its centre pixel, black text ink somewhere in the string's box, the four quadrants of a
+2×2 image in their own colours, a red-to-blue axial shading inside the clip it was given and NOT outside it, and
+a form XObject's square — each read back from the destination's bytes.
+
 **Built, shared, and C throughout, over Core Foundation — and the NS types are converted back to CF.**
 This section used to say the opposite on every count ("imported; not yet built, and its NS types have not
 been converted back to CF", with lcms2 "not installed on this machine").
@@ -117,15 +132,16 @@ been converted back to CF", with lcms2 "not installed on this machine").
 
 ### What is not done
 
-- **PDF stops at the content stream: nothing draws it, and nothing writes it.** `CGContextDrawPDFPage` is the
-  renderer and it needs embedded-font programs, Type 3 glyph procedures, image XObjects and transparency groups —
-  a landing of its own. `CGPDFContext` is the writer, and it needs `CGContext` to gain a RECORDING path (its fills
-  go straight to pixman today), which is an architecture change rather than a new class. So `dataWithPDFInsideRect:`
-  still refuses, print-to-PDF does not exist, and `NSPDFImageRep` has no renderer to drive.
+- **PDF DRAWS BUT DOES NOT WRITE.** `CGPDFContext` is the writer, and it needs `CGContext` to gain a RECORDING
+  path (its fills go straight to pixman today), which is an architecture change rather than a new class. So
+  `dataWithPDFInsideRect:` still refuses and print-to-PDF does not exist; `NSPDFImageRep` now has a renderer to
+  drive, and the AppKit door that uses it is the next step on that side.
 - **PDF encryption is reported, not decrypted.** `CGPDFDocumentIsEncrypted` answers true and the pages, catalog and
   info refuse by name; `IsUnlocked` is therefore false for an encrypted file and there is no password door.
-- **The scanner skips inline images rather than parsing them**, and `CGPSConverter` (PostScript) does not exist.
-  DCT, JPX, JBIG2 and CCITT streams are named through `CGPDFDataFormat` and their bytes returned untouched.
+- **The scanner skips inline images rather than parsing them**, so the renderer does not draw them either, and
+  `CGPSConverter` (PostScript) does not exist. The RENDERER also refuses Type 3 fonts, named or vertical CMaps,
+  patterns, soft masks and mesh shadings by name; DCT images are drawn, while JPX, JBIG2 and CCITT streams are
+  named through `CGPDFDataFormat` and their bytes returned untouched.
 - **No umbrella `CoreGraphics.h`**, so Apple's usual `#include <CoreGraphics/CoreGraphics.h>` cannot be
   written; a consumer includes the individual headers.
 - **Three translation units are named `*Foundation.c`** — `CGDataProviderFoundation.c`,

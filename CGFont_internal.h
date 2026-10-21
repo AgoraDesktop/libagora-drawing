@@ -160,6 +160,12 @@ int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size,
                          unsigned char **coverage, int *width, int *height, int *left, int *top,
                          double *advance, int *samples);
 
+/* **A UNICODE CODEPOINT'S GLYPH, WHICH IS THE ENGINE'S CHARACTER MAP AND NOT A NAME LOOKUP.** It is the door a
+ * PDF reader needs for a simple font whose /Encoding is a standard one: the encoding maps a byte to a character,
+ * and the character maps through the font's own cmap. `kCGFontIndexInvalid` when the face has no glyph for it.
+ * The public `CGFontGetGlyphsForUnichars` is still owed; this is the primitive it will be built on. */
+CGGlyph cg_font_glyph_for_unichar(CGFontRef font, unsigned unichar);
+
 /* **THE PAIR ADJUSTMENT BETWEEN TWO GLYPHS, IN FONT UNITS, OR ZERO.** This is the `kern` table, which is what a
  * font's typographer wrote about specific pairs — `To`, `AV`, `P.` — as opposed to the per-glyph advance every
  * other door here answers. It exists because a LINE has to apply it: Core Text's typesetting kerns, and without

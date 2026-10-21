@@ -476,6 +476,17 @@ void CGContextDrawRadialGradient(CGContextRef context, CGGradientRef gradient,
  */
 void CGContextDrawShading(CGContextRef context, CGShadingRef shading);
 
+/* **A PDF PAGE'S CONTENT STREAM, RUN AS DRAWING.** This is the door `NSPDFImageRep` and every preview panel
+ * stand on: the page is drawn in its OWN user space — no rotation, no fitting — and the caller who wants it in a
+ * rectangle concatenates `CGPDFPageGetDrawingTransform` first. `CGPDFPage.h` owns the page type; the forward
+ * declaration here keeps a caller from having to include both headers in one order.
+ *
+ * WHAT IS NOT DRAWN IS REFUSED BY NAME: Type 3 fonts, named CMaps, inline images, patterns, soft masks, mesh
+ * shadings and the JPX/JBIG2/CCITT image codecs each print a `CG-REFUSE` line. An encrypted document refuses the
+ * page outright. */
+typedef struct CGPDFPage *CGPDFPageRef;
+CG_EXTERN void CGContextDrawPDFPage(CGContextRef c, CGPDFPageRef page);
+
 /* The current point OF THE PATH, in user space: the pen position the last move or add left
  * behind. */
 CGPoint CGContextGetPathCurrentPoint(CGContextRef context);

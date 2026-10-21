@@ -1031,6 +1031,20 @@ CGGlyph cg_font_glyph_with_name(CGFontRef font, const char *name)
 	return (CGGlyph)index;
 }
 
+CGGlyph cg_font_glyph_for_unichar(CGFontRef font, unsigned unichar)
+{
+	FT_UInt index;
+
+	if (font == NULL || font->face == NULL) {
+		return (CGGlyph)kCGFontIndexInvalid;
+	}
+	index = FT_Get_Char_Index(font->face, (FT_ULong)unichar);
+	if (index == 0) {
+		return (CGGlyph)kCGFontIndexInvalid;
+	}
+	return (CGGlyph)index;
+}
+
 /* ------------------------------------------------------------------------- */
 /* Rasterisation: the one door that asks the engine for pixels                */
 /* ------------------------------------------------------------------------- */
