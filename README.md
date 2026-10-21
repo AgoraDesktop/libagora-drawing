@@ -65,13 +65,18 @@ OUTLINES through `cg_font_glyph_outline` — a PDF's positioning is not Core Tex
 the text-showing operators mean — which also makes the render modes (fill, stroke, clip) one path operation each.
 Fonts come from the embedded /FontFile, /FontFile2 or /FontFile3 program through FreeType, with the `ABCDEF+`
 subset tag stripped and the standard fourteen falling back by name; /Encoding is a base table plus /Differences,
-and Identity-H CID fonts read /CIDToGIDMap and /W. Colour is converted to RGB once, including /ICCBased through
+and a Type 1 font that carries NONE is read through the program's own Adobe encoding — the case every pdfTeX
+document is, and without it `efficient` draws with a breve where the `ffi` ligature belongs; Identity-H CID fonts
+read /CIDToGIDMap and /W. Colour is converted to RGB once, including /ICCBased through
 little CMS, /Indexed, /Separation and /DeviceN tint transforms, and the CalRGB and Lab formulas. Images are DCT
 through the JPEG decoder or raw samples converted per colour space; form XObjects recurse with their /Matrix and
 /BBox; axial and radial shadings sample their function into a gradient. MEASURED (tests/pdf.c, one page): a
 DeviceRGB rectangle at its centre pixel, black text ink somewhere in the string's box, the four quadrants of a
 2×2 image in their own colours, a red-to-blue axial shading inside the clip it was given and NOT outside it, and
-a form XObject's square — each read back from the destination's bytes.
+a form XObject's square — each read back from the destination's bytes. AND MEASURED against real files rather
+than only fixtures: `/usr/share/doc/quilt/quilt.pdf` (pdfTeX, twelve pages of Type 1 text) and
+`/usr/share/cups/data/default-testpage.pdf` (paths, quadratic logo outlines, CMYK colour wheels) render as poppler
+renders them.
 
 **Built, shared, and C throughout, over Core Foundation — and the NS types are converted back to CF.**
 This section used to say the opposite on every count ("imported; not yet built, and its NS types have not
