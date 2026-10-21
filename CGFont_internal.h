@@ -190,6 +190,13 @@ bool cg_font_has_truetype_outlines(CGFontRef font);
  * CMap, which is the honest answer rather than a guess. */
 size_t cg_font_unicode_map(CGFontRef font, unsigned *map, size_t count);
 
+/* **THE CFF PROGRAM AND ITS DIALECT.** A CFF face can be embedded as a PDF Type 1 font when it is NOT CID-keyed;
+ * `cg_font_copy_cff_program` returns the bare `CFF ` table (from an OpenType wrapper) or the provider's bytes (a
+ * bare CFF file), and the two questions say whether that route is legal for this face. */
+bool cg_font_is_cff(CGFontRef font);
+bool cg_font_is_cid_keyed(CGFontRef font);
+CFDataRef cg_font_copy_cff_program(CGFontRef font) CF_RETURNS_RETAINED;
+
 /* **THE PAIR ADJUSTMENT BETWEEN TWO GLYPHS, IN FONT UNITS, OR ZERO.** This is the `kern` table, which is what a
  * font's typographer wrote about specific pairs — `To`, `AV`, `P.` — as opposed to the per-glyph advance every
  * other door here answers. It exists because a LINE has to apply it: Core Text's typesetting kerns, and without

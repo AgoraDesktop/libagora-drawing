@@ -55,3 +55,13 @@ add_test(NAME pdf-write COMMAND pdf_write)
 
 set_tests_properties(pdf-write PROPERTIES ENVIRONMENT
   "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")
+
+# **CFF, AS A PDF TYPE 1 FONT.** The face is the host's (this tree vendors none), so the test SKIPS with 77 when no
+# candidate is present. It checks the /FontFile3 /Type1C structure, /Differences through the Tj content, the rendered
+# ink, and that 300 glyphs split across more than one 255-code shard.
+add_executable(pdf_cff pdf_cff.c)
+target_link_libraries(pdf_cff PRIVATE Drawing CoreFoundation::CoreFoundation)
+
+add_test(NAME pdf-cff COMMAND pdf_cff)
+set_tests_properties(pdf-cff PROPERTIES SKIP_RETURN_CODE 77 ENVIRONMENT
+  "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")

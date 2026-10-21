@@ -36,6 +36,8 @@
 #include FT_LCD_FILTER_H
 #include FT_SFNT_NAMES_H
 #include FT_TRUETYPE_TABLES_H
+#include FT_CID_H
+#include FT_FONT_FORMATS_H
 
 #include <stdlib.h>
 #include <string.h>
@@ -1062,6 +1064,64 @@ bool cg_font_has_truetype_outlines(CGFontRef font)
 	}
 	return FT_Load_Sfnt_Table(font->face, FT_MAKE_TAG('g', 'l', 'y', 'f'), 0, NULL, &length) == 0 &&
 	       length > 0;
+}
+
+bool cg_font_is_cff(CGFontRef font)
+{
+	const char *format;
+
+	if (font == NULL || font->face == NULL) {
+		return false;
+	}
+	format = FT_Get_Font_Format(font->face);
+	return format != NULL && strcmp(format, "CFF") == 0;
+}
+
+bool cg_font_is_cid_keyed(CGFontRef font)
+{
+	const char *registry = NULL;
+	const char *ordering = NULL;
+	FT_Int supplement = 0;
+
+	if (font == NULL || font->face == NULL) {
+		return false;
+	}
+	if (FT_Get_CID_Registry_Ordering_Supplement(font->face, &registry, &ordering, &supplement) != 0) {
+		return false;
+	}
+	return registry != NULL;
+}
+
+CFDataRef cg_font_copy_cff_program(CGFontRef font)
+{
+	if (font == NULL || font->face == NULL) {
+		return NULL;
+	}
+	if (FT_IS_SFNT(font->face)) {
+		FT_ULong length = 0;
+		unsigned char *bytes;
+		CFDataRef data;
+
+		if (FT_Load_Sfnt_Table(font->face, FT_MAKE_TAG('C', 'F', 'F', ' '), 0, NULL, &length) != 0 ||
+		    length == 0) {
+			return NULL;
+		}
+		bytes = malloc(length);
+		if (bytes == NULL) {
+			return NULL;
+		}
+		if (FT_Load_Sfnt_Table(font->face, FT_MAKE_TAG('C', 'F', 'F', ' '), 0, bytes, &length) != 0) {
+			free(bytes);
+			return NULL;
+		}
+		data = CFDataCreate(kCFAllocatorDefault, bytes, (CFIndex)length);
+		free(bytes);
+		return data;
+	}
+	if (font->provider != NULL) {
+		return CGDataProviderCopyData(font->provider);
+	}
+	return NULL;
 }
 
 size_t cg_font_unicode_map(CGFontRef font, unsigned *map, size_t count)

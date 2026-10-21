@@ -139,7 +139,20 @@ struct cg_pdf_gstate {
 	char name[24];
 };
 
-/* ONE EMBEDDED FONT: the program, the two dictionaries that name it and the widths of the glyphs actually used. */
+/* ONE 255-GLYPH SHARD OF A CFF FONT. A PDF Type 1 font selects glyphs by one-byte code through an /Encoding, so a
+ * CFF face with more glyphs than that is split across several font resources; each shard owns its own
+ * dictionaries and its own code→glyph table. */
+struct cg_pdf_shard {
+	unsigned object, descriptor, font_file, tounicode;
+	char name[24];
+	unsigned max_code;
+	unsigned codes[256];
+	unsigned widths[256];
+	char names[256][64];
+	bool used[256];
+};
+
+/* ONE EMBEDDED FONT: the program, the dictionaries that name it and the glyphs actually used. */
 struct cg_pdf_font_resource {
 	CGFontRef font;		/* retained */
 	unsigned object;	/* the Type0 font */
@@ -159,6 +172,13 @@ struct cg_pdf_font_resource {
 	unsigned *widths;	/* [CID], 1/1000 em */
 	size_t cid_count;
 	size_t cid_cap;
+	/* CFF (Type 1C) EMBEDDING: the shards, and the glyph→(shard, code) assignment. */
+	int kind;			/* 0 = TrueType/CIDFontType2, 1 = CFF/Type1 */
+	unsigned *cff_code;		/* [old glyph] -> code, zero when unused */
+	unsigned *cff_shard;		/* [old glyph] -> shard index + 1 */
+	struct cg_pdf_shard *shards;
+	size_t shard_count;
+	size_t shard_cap;
 };
 struct cg_pdf_writer {
 	CGDataConsumerRef consumer;
@@ -452,7 +472,16 @@ void cg_pdf_writer_end_page(struct cg_pdf_writer *w)
 
 		fn_buf_printf(&resources, "/Font << ");
 		for (f = 0; f < w->font_count; f++) {
-			fn_buf_printf(&resources, "/%s %u 0 R ", w->fonts[f].name, w->fonts[f].object);
+			if (w->fonts[f].kind == 1) {
+				size_t s;
+
+				for (s = 0; s < w->fonts[f].shard_count; s++) {
+					fn_buf_printf(&resources, "/%s %u 0 R ", w->fonts[f].shards[s].name,
+						      w->fonts[f].shards[s].object);
+				}
+			} else {
+				fn_buf_printf(&resources, "/%s %u 0 R ", w->fonts[f].name, w->fonts[f].object);
+			}
 		}
 		fn_buf_printf(&resources, ">> ");
 	}
@@ -1070,15 +1099,17 @@ static int fn_metric_1000(int value, int upem)
 	return (int)((double)value * 1000.0 / (double)upem + (value >= 0 ? 0.5 : -0.5));
 }
 
-/* THE FONT RESOURCE, CREATED ON FIRST USE. `NULL` means "draw the outline": the face has no program, or its
- * outlines are CFF rather than `glyf`, so a CIDFontType2 pointing at it would be a lie. The OBJECTS are made here
- * because the page's resource dictionary needs their numbers; their BODIES wait for Close, where the subset and
- * the CID-to-glyph map are known. */
+/* THE FONT RESOURCE, CREATED ON FIRST USE. `NULL` means "draw the outline": the face has no program, its
+ * outlines are CFF and CID-keyed (not a legal Type 1C), or its program cannot be read. The OBJECTS a TrueType
+ * font needs are made here because the page's resource dictionary needs their numbers; a CFF font's objects are
+ * per shard and wait for the first glyph. */
 static struct cg_pdf_font_resource *fn_font_resource(struct cg_pdf_writer *w, CGFontRef font)
 {
 	size_t i;
 	struct cg_pdf_font_resource *entry;
 	char name[96];
+	bool truetype;
+	bool cff;
 
 	if (font == NULL) {
 		return NULL;
@@ -1088,11 +1119,20 @@ static struct cg_pdf_font_resource *fn_font_resource(struct cg_pdf_writer *w, CG
 			return &w->fonts[i];
 		}
 	}
-	if (!cg_font_has_truetype_outlines(font)) {
+	truetype = cg_font_has_truetype_outlines(font);
+	cff = false;
+	if (!truetype && cg_font_is_cff(font) && !cg_font_is_cid_keyed(font)) {
+		CFDataRef program = cg_font_copy_cff_program(font);
+
+		if (program != NULL) {
+			cff = true;
+			CFRelease(program);
+		}
+	}
+	if (!truetype && !cff) {
 		if (!w->warned_no_embed) {
-			fprintf(stderr, "CG-REFUSE: a font whose outlines are not TrueType `glyf` is written as glyph "
-					"OUTLINES; its program is not a /FontFile2 and pretending it is would break the "
-					"reader\n");
+			fprintf(stderr, "CG-REFUSE: this face's program is neither TrueType `glyf` nor a non-CID-keyed "
+					"CFF; its text is written as glyph OUTLINES\n");
 			w->warned_no_embed = true;
 		}
 		return NULL;
@@ -1109,33 +1149,122 @@ static struct cg_pdf_font_resource *fn_font_resource(struct cg_pdf_writer *w, CG
 	}
 	entry = &w->fonts[w->font_count];
 	memset(entry, 0, sizeof *entry);
-	entry->font_file = fn_new_object(w);
-	entry->descendant = fn_new_object(w);
-	entry->descriptor = fn_new_object(w);
-	entry->object = fn_new_object(w);
-	if (entry->font_file == 0 || entry->descendant == 0 || entry->descriptor == 0 || entry->object == 0) {
-		return NULL;
-	}
 	entry->font = (CGFontRef)CGFontRetain(font);
 	entry->upem = CGFontGetUnitsPerEm(font);
 	if (entry->upem <= 0) {
 		CGFontRelease(entry->font);
 		return NULL;
 	}
+	entry->kind = cff ? 1 : 0;
 	entry->ascent = fn_metric_1000(CGFontGetAscent(font), entry->upem);
 	entry->descent = -abs(fn_metric_1000(CGFontGetDescent(font), entry->upem));
 	entry->cap_height = fn_metric_1000(CGFontGetCapHeight(font), entry->upem);
 	entry->glyph_count = CGFontGetNumberOfGlyphs(font);
-	entry->old_to_cid = calloc(entry->glyph_count + 1, sizeof *entry->old_to_cid);
-	entry->to_unicode = calloc(entry->glyph_count + 1, sizeof *entry->to_unicode);
-	fn_font_name(font, name, sizeof name, entry->object);
+	fn_font_name(font, name, sizeof name, w->font_count + 1);
 	snprintf(entry->base_name, sizeof entry->base_name, "%s", name);
-	snprintf(entry->name, sizeof entry->name, "F%u", entry->object);
+	entry->to_unicode = calloc(entry->glyph_count + 1, sizeof *entry->to_unicode);
 	if (entry->to_unicode != NULL) {
 		cg_font_unicode_map(font, entry->to_unicode, entry->glyph_count + 1);
 	}
+	if (cff) {
+		entry->cff_code = calloc(entry->glyph_count + 1, sizeof *entry->cff_code);
+		entry->cff_shard = calloc(entry->glyph_count + 1, sizeof *entry->cff_shard);
+		if (entry->cff_code == NULL || entry->cff_shard == NULL) {
+			free(entry->cff_code);
+			free(entry->cff_shard);
+			free(entry->to_unicode);
+			CGFontRelease(entry->font);
+			return NULL;
+		}
+	} else {
+		entry->old_to_cid = calloc(entry->glyph_count + 1, sizeof *entry->old_to_cid);
+		entry->font_file = fn_new_object(w);
+		entry->descendant = fn_new_object(w);
+		entry->descriptor = fn_new_object(w);
+		entry->object = fn_new_object(w);
+		if (entry->old_to_cid == NULL || entry->font_file == 0 || entry->descendant == 0 ||
+		    entry->descriptor == 0 || entry->object == 0) {
+			free(entry->old_to_cid);
+			free(entry->to_unicode);
+			CGFontRelease(entry->font);
+			return NULL;
+		}
+		snprintf(entry->name, sizeof entry->name, "F%u", entry->object);
+	}
 	w->font_count++;
 	return entry;
+}
+
+/* A NEW CFF SHARD WITH ITS FOUR OBJECTS. The bodies are written at Close, when the code table is complete. */
+static struct cg_pdf_shard *fn_new_shard(struct cg_pdf_writer *w, struct cg_pdf_font_resource *font)
+{
+	struct cg_pdf_shard *shard;
+
+	if (font->shard_count == font->shard_cap) {
+		size_t cap = font->shard_cap ? font->shard_cap * 2 : 4;
+		struct cg_pdf_shard *grown = realloc(font->shards, cap * sizeof *grown);
+
+		if (grown == NULL) {
+			return NULL;
+		}
+		font->shards = grown;
+		font->shard_cap = cap;
+	}
+	shard = &font->shards[font->shard_count];
+	memset(shard, 0, sizeof *shard);
+	shard->font_file = fn_new_object(w);
+	shard->descriptor = fn_new_object(w);
+	shard->object = fn_new_object(w);
+	shard->tounicode = fn_new_object(w);
+	if (shard->font_file == 0 || shard->descriptor == 0 || shard->object == 0 || shard->tounicode == 0) {
+		return NULL;
+	}
+	snprintf(shard->name, sizeof shard->name, "F%u", shard->object);
+	font->shard_count++;
+	return shard;
+}
+
+/* THE CODE FOR A CFF GLYPH, creating a shard when the last is full. Zero means "draw the outline": the glyph has
+ * no name in the CFF charset, so a /Differences entry cannot select it. */
+static unsigned fn_cff_code(struct cg_pdf_writer *w, struct cg_pdf_font_resource *font, CGGlyph glyph,
+			    struct cg_pdf_shard **out_shard)
+{
+	struct cg_pdf_shard *shard;
+	char name[64];
+	unsigned code;
+	int advance = 0;
+
+	if (font->cff_code == NULL || glyph >= font->glyph_count) {
+		return 0;
+	}
+	if (font->cff_code[glyph] != 0) {
+		*out_shard = &font->shards[font->cff_shard[glyph] - 1];
+		return font->cff_code[glyph];
+	}
+	if (cg_font_glyph_name(font->font, glyph, name, sizeof name) <= 0) {
+		return 0;
+	}
+	if (font->shard_count == 0 || font->shards[font->shard_count - 1].max_code >= 255) {
+		shard = fn_new_shard(w, font);
+		if (shard == NULL) {
+			return 0;
+		}
+	} else {
+		shard = &font->shards[font->shard_count - 1];
+	}
+	code = ++shard->max_code;
+	shard->codes[code] = glyph;
+	shard->used[code] = true;
+	snprintf(shard->names[code], sizeof shard->names[code], "%s", name);
+	if (CGFontGetGlyphAdvances(font->font, &glyph, 1, &advance)) {
+		shard->widths[code] = (unsigned)fn_metric_1000(advance, font->upem);
+	} else {
+		shard->widths[code] = 1000;
+	}
+	font->cff_code[glyph] = code;
+	font->cff_shard[glyph] = (unsigned)font->shard_count;
+	*out_shard = shard;
+	return code;
 }
 
 /* THE CID FOR A GLYPH, assigned on first use. The content streams carry these CID numbers rather than glyph
@@ -1204,6 +1333,31 @@ bool cg_pdf_writer_text_glyph(struct cg_pdf_writer *w, CGFontRef font_ref, CGGly
 	if (font == NULL) {
 		return false;
 	}
+	if (font->kind == 1) {
+		struct cg_pdf_shard *shard = NULL;
+
+		cid = fn_cff_code(w, font, glyph, &shard);
+		if (cid == 0 || shard == NULL) {
+			return false;
+		}
+		em = (double)font_size / (double)font->upem;
+		a = text_matrix.a;
+		b = text_matrix.b;
+		c = text_matrix.c;
+		d = text_matrix.d;
+		e = pen.x + text_matrix.tx * em;
+		f = pen.y + text_matrix.ty * em;
+		fn_emit_gstate(w, paint, mode != 1, mode != 0);
+		if (mode != 1) {
+			fn_emit_fill_colour(w, paint);
+		}
+		if (mode != 0) {
+			fn_emit_stroke_colour(w, paint);
+		}
+		fn_content_printf(w, "BT\n/%s %.4f Tf\n%d Tr\n%.4f %.4f %.4f %.4f %.4f %.4f Tm\n<%02X> Tj\nET\n",
+				  shard->name, (double)font_size, mode, a, b, c, d, e, f, cid);
+		return true;
+	}
 	cid = fn_cid_for(font, glyph);
 	if (cid == 0) {
 		return false;
@@ -1238,9 +1392,123 @@ static void fn_put_be16(unsigned char *p, unsigned value)
 	p[1] = (unsigned char)value;
 }
 
+static void fn_finalise_truetype_font(struct cg_pdf_writer *w, struct cg_pdf_font_resource *font);
+
+/* A /Differences NAME, `#`-escaped for the bytes a PDF name cannot hold literally. */
+static void fn_append_pdf_name(cg_buf *out, const char *name)
+{
+	size_t i;
+
+	fn_buf_put(out, "/", 1);
+	for (i = 0; name[i] != '\0'; i++) {
+		unsigned char c = (unsigned char)name[i];
+
+		if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+		    c == '.' || c == '_' || c == '-' || c == '+') {
+			fn_buf_put(out, &c, 1);
+		} else {
+			fn_buf_printf(out, "#%02X", (unsigned)c);
+		}
+	}
+}
+
+/* THE CFF FONT, AS A TYPE 1 FONT WITH /Differences ENCODINGS. A PDF Type 1 font selects a glyph by a one-byte
+ * code and a glyph NAME, which is exactly what a non-CID CFF charset provides; a face with more than 255 used
+ * glyphs is split across shards, each a font resource of its own. The program is embedded whole (a CFF is small,
+ * and subsetting one is a separate problem from subsetting `glyf`). */
+static void fn_finalise_cff_font(struct cg_pdf_writer *w, struct cg_pdf_font_resource *font)
+{
+	CFDataRef program = cg_font_copy_cff_program(font->font);
+	size_t shard_index;
+
+	if (program == NULL) {
+		return;
+	}
+	for (shard_index = 0; shard_index < font->shard_count; shard_index++) {
+		struct cg_pdf_shard *shard = &font->shards[shard_index];
+		cg_buf widths = { 0 };
+		cg_buf differences = { 0 };
+		cg_buf cmap = { 0 };
+		unsigned code;
+		size_t written = 0;
+
+		fn_object_stream(w, shard->font_file, "/Subtype /Type1C", CFDataGetBytePtr(program),
+				 (size_t)CFDataGetLength(program));
+		fn_object_printf(w, shard->descriptor,
+				 "<< /Type /FontDescriptor /FontName /%s /Flags 32 /FontBBox [-200 -300 1200 900] "
+				 "/ItalicAngle 0 /Ascent %d /Descent %d /CapHeight %d /StemV 80 "
+				 "/FontFile3 %u 0 R >>",
+				 font->base_name, font->ascent, font->descent, font->cap_height, shard->font_file);
+		fn_buf_printf(&widths, "[");
+		for (code = 1; code <= shard->max_code; code++) {
+			fn_buf_printf(&widths, "%u ", shard->used[code] ? shard->widths[code] : 0);
+		}
+		fn_buf_printf(&widths, "]");
+		fn_buf_printf(&differences, "[");
+		for (code = 1; code <= shard->max_code; code++) {
+			if (!shard->used[code]) {
+				continue;
+			}
+			fn_buf_printf(&differences, "%u ", code);
+			fn_append_pdf_name(&differences, shard->names[code]);
+			fn_buf_put(&differences, " ", 1);
+		}
+		fn_buf_printf(&differences, "]");
+
+		fn_buf_printf(&cmap, "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
+				     "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
+				     "/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n"
+				     "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n");
+		for (code = 1; code <= shard->max_code; code++) {
+			unsigned old = shard->used[code] ? shard->codes[code] : 0;
+			unsigned unicode = (old != 0 && font->to_unicode != NULL && old <= font->glyph_count)
+						   ? font->to_unicode[old] : 0;
+
+			if (unicode == 0 || unicode > 0xFFFF) {
+				continue;
+			}
+			if (written % 100 == 0) {
+				if (written > 0) {
+					fn_buf_printf(&cmap, "endbfchar\n");
+				}
+				fn_buf_printf(&cmap, "100 beginbfchar\n");
+			}
+			fn_buf_printf(&cmap, "<%02X> <%04X>\n", code, unicode);
+			written++;
+		}
+		if (written > 0) {
+			fn_buf_printf(&cmap, "endbfchar\n");
+		}
+		fn_buf_printf(&cmap, "endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+		fn_object_stream(w, shard->tounicode, "", cmap.data, cmap.len);
+		fn_buf_free(&cmap);
+
+		fn_object_printf(w, shard->object,
+				 "<< /Type /Font /Subtype /Type1 /BaseFont /%s /FirstChar 1 /LastChar %u "
+				 "/Widths %s /Encoding << /Type /Encoding /Differences %s >> "
+				 "/FontDescriptor %u 0 R /ToUnicode %u 0 R >>",
+				 font->base_name, shard->max_code,
+				 widths.data != NULL ? (const char *)widths.data : "[]",
+				 differences.data != NULL ? (const char *)differences.data : "[]",
+				 shard->descriptor, shard->tounicode);
+		fn_buf_free(&widths);
+		fn_buf_free(&differences);
+	}
+	CFRelease(program);
+}
+
+static void fn_finalise_font(struct cg_pdf_writer *w, struct cg_pdf_font_resource *font)
+{
+	if (font->kind == 1) {
+		fn_finalise_cff_font(w, font);
+	} else {
+		fn_finalise_truetype_font(w, font);
+	}
+}
+
 /* THE TYPE0 FONT, ITS DESCENDANT, ITS DESCRIPTOR, THE SUBSETTED PROGRAM, THE CID→GLYPH MAP AND THE TOUNICODE
  * CMAP. Everything here waits for Close because the used-glyph set is only complete then. */
-static void fn_finalise_font(struct cg_pdf_writer *w, struct cg_pdf_font_resource *font)
+static void fn_finalise_truetype_font(struct cg_pdf_writer *w, struct cg_pdf_font_resource *font)
 {
 	unsigned *old_glyphs = NULL;
 	cg_pdf_subset *subset = NULL;
@@ -1608,6 +1876,9 @@ void cg_pdf_writer_free(struct cg_pdf_writer *w)
 			free(w->fonts[f].old_to_cid);
 			free(w->fonts[f].cid_to_old);
 			free(w->fonts[f].widths);
+			free(w->fonts[f].cff_code);
+			free(w->fonts[f].cff_shard);
+			free(w->fonts[f].shards);
 		}
 		free(w->fonts);
 	}

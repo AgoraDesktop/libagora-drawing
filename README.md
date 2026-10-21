@@ -89,7 +89,12 @@ becomes a Type0/CIDFontType2 font with Identity-H and a /ToUnicode CMap, so the 
 searchable at any scale. **THE PROGRAM IS SUBSETTED**: only the glyphs the document used, their composite
 components and `.notdef` are kept, renumbered, and named through a `/CIDToGIDMap`; the content streams carry CIDs,
 so the renumbering never rewrites a page. A two-glyph page's font is a few kilobytes rather than the whole face,
-and `pdffonts` reports the six-letter subset tag; a CFF or program-less face falls back to exact vector OUTLINES, and the writer says which
+and `pdffonts` reports the six-letter subset tag. **A NON-CID-KEYED CFF FACE IS EMBEDDED TOO**, as a PDF Type 1
+font: the bare `CFF ` table becomes `/FontFile3 /Type1C`, each used glyph gets a one-byte code and a
+`/Differences` name from the CFF charset, and a face using more than 255 glyphs is split across shards — the
+255-code limit is PDF's, not this writer's. A CFF program is embedded WHOLE (CFF subsetting is a different problem
+from `glyf` subsetting) and a CID-keyed CFF still falls back to outlines; `tests/pdf_cff.c` checks the structure,
+the rendered ink and the shard boundary, and skips when the host has no CFF face; a CFF or program-less face falls back to exact vector OUTLINES, and the writer says which
 it did. MEASURED
 (tests/pdf_write.c): a two-page document drawn, closed, reopened by this library's own reader, and rendered by
 its own renderer — rectangle, text ink, an opaque image's samples, an alpha image's transparent half, a /ca 0.5
@@ -157,10 +162,11 @@ been converted back to CF", with lcms2 "not installed on this machine").
 
 ### What is not done
 
-- **PDF EMBEDS TRUETYPE, NOT CFF.** A face whose outlines are CFF or Type 1 has no program a CIDFontType2 may
-  point at, so its text is written as outlines and cannot be selected; the writer names that fallback when it
-  happens. Subsetting keeps the glyphs and their composites, not the shaping tables (`GSUB`, `GPOS`, `kern`) — a
-  PDF places every glyph explicitly, so those cannot affect the page. The PDF context also REFUSES BY NAME gradients, shadings, patterns, shadows, transparency layers and
+- **PDF EMBEDS TRUETYPE AND NON-CID CFF; NOT TYPE 1 OR CID-KEYED CFF.** A Type 1 face has no `/FontFile2` or
+  `/Type1C` route here, and a CID-keyed CFF cannot be a simple Type 1 font, so both fall back to outlines; the
+  writer names that fallback when it happens. CFF programs are embedded whole rather than subsetted. TrueType
+  subsetting keeps the glyphs and their composites, not the shaping tables (`GSUB`, `GPOS`, `kern`) — a PDF places
+  every glyph explicitly, so those cannot affect the page. The PDF context also REFUSES BY NAME gradients, shadings, patterns, shadows, transparency layers and
   clip-to-mask, so a caller knows when a page lacks them.
 - **PDF encryption is reported, not decrypted.** `CGPDFDocumentIsEncrypted` answers true and the pages, catalog and
   info refuse by name; `IsUnlocked` is therefore false for an encrypted file and there is no password door.
