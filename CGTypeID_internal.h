@@ -53,5 +53,9 @@ CFTypeID cg_color_type_id(void);
 #define CG_TYPE_ID_CGSHADING		11u
 #define CG_TYPE_ID_CGDATACONSUMER	12u
 #define CG_TYPE_ID_CGLAYER		13u
+/* THE PAGE IS A TABLE CLASS: `CGPDFPageGetTypeID` answers this constant, and the page's `Retain`/`Release`
+ * are the refcount beside it. THE DOCUMENT IS NOT: it is a Core Foundation type (CGPDFDocument.c registers it),
+ * so its door answers Core Foundation's id exactly as CGColor's and CGImageDestination's do. */
+#define CG_TYPE_ID_CGPDFPAGE		14u
 
 #endif /* CORE_GRAPHICS_CGTYPEID_INTERNAL_H */

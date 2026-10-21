@@ -34,3 +34,14 @@ set_tests_properties(window-levels PROPERTIES ENVIRONMENT
   "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")
 set_tests_properties(fonts PROPERTIES ENVIRONMENT
   "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")
+
+# THE PDF READER: two fixtures built byte by byte (a classic cross-reference table and a PDF 1.5 xref stream with
+# an object stream), every structural door, and the page transform's rotated geometry. The fixture builder and the
+# library are the only two things here; zlib is the library's PRIVATE dependency, reached through the .so.
+add_executable(pdf pdf.c)
+target_link_libraries(pdf PRIVATE Drawing CoreFoundation::CoreFoundation)
+
+add_test(NAME pdf COMMAND pdf)
+
+set_tests_properties(pdf PROPERTIES ENVIRONMENT
+  "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")

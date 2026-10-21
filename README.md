@@ -42,6 +42,22 @@ three static instances and the families that reserve a name are recorded in `fon
 
 ## Status
 
+**AND A PDF READER IS HERE: THE DOCUMENT, THE PAGE TREE, THE OBJECTS AND THE CONTENT STREAM.** It is the G2 reader
+the surface plan parked, built in-tree rather than over pdfium — a reader-only C++ library in a C stack would have
+had to lend its own object model to `CGPDFObject`, which is the one thing the plan said not to do. The doors are
+`CGPDFDocument`, `CGPDFPage`, `CGPDFObject`, `CGPDFArray`, `CGPDFDictionary`, `CGPDFString`, `CGPDFStream`,
+`CGPDFContentStream`, `CGPDFScanner` and `CGPDFOperatorTable`. BOTH CROSS-REFERENCE SPELLINGS ARE READ (the
+classic `xref` table and the PDF 1.5 stream, with `/XRefStm`), and so are OBJECT STREAMS, because a file that
+compresses its dictionaries into one stream is now the normal case rather than the exotic one. The filters are
+Flate (zlib), LZW, ASCIIHex, ASCII85 and RunLength, with the PNG and TIFF predictors — a PDF 1.5 cross-reference
+stream cannot be read at all without the PNG predictor, so it is not an optional refinement. A page FLATTENS ITS
+INHERITANCE on open (`/MediaBox`, `/CropBox`, `/Rotate` from any ancestor), `CGPDFPageGetDrawingTransform` does
+the quarter-turn-then-scale arithmetic, and the scanner tokenises a content stream into operands and operators
+with callbacks. MEASURED (tests/pdf.c): two fixtures built byte by byte — a classic-xref three-page file with an
+inherited box, a UTF-16BE title, a PDF date and two filtered streams, and a 1.5 file whose `/Info` lives inside an
+object stream — every structural door asserted, both fixtures reopened from a file URL, and the scanner's five
+callbacks checked operand by operand.
+
 **Built, shared, and C throughout, over Core Foundation — and the NS types are converted back to CF.**
 This section used to say the opposite on every count ("imported; not yet built, and its NS types have not
 been converted back to CF", with lcms2 "not installed on this machine").
@@ -101,6 +117,15 @@ been converted back to CF", with lcms2 "not installed on this machine").
 
 ### What is not done
 
+- **PDF stops at the content stream: nothing draws it, and nothing writes it.** `CGContextDrawPDFPage` is the
+  renderer and it needs embedded-font programs, Type 3 glyph procedures, image XObjects and transparency groups —
+  a landing of its own. `CGPDFContext` is the writer, and it needs `CGContext` to gain a RECORDING path (its fills
+  go straight to pixman today), which is an architecture change rather than a new class. So `dataWithPDFInsideRect:`
+  still refuses, print-to-PDF does not exist, and `NSPDFImageRep` has no renderer to drive.
+- **PDF encryption is reported, not decrypted.** `CGPDFDocumentIsEncrypted` answers true and the pages, catalog and
+  info refuse by name; `IsUnlocked` is therefore false for an encrypted file and there is no password door.
+- **The scanner skips inline images rather than parsing them**, and `CGPSConverter` (PostScript) does not exist.
+  DCT, JPX, JBIG2 and CCITT streams are named through `CGPDFDataFormat` and their bytes returned untouched.
 - **No umbrella `CoreGraphics.h`**, so Apple's usual `#include <CoreGraphics/CoreGraphics.h>` cannot be
   written; a consumer includes the individual headers.
 - **Three translation units are named `*Foundation.c`** — `CGDataProviderFoundation.c`,
