@@ -4248,22 +4248,51 @@ static double cg_image_mask_coverage(CGImageRef mask, const CGFloat *decode, dou
 	if (w == 0 || h == 0) {
 		return 1.0;
 	}
-	sx = (int)(u * (double)w);
-	sy = (int)((1.0 - v) * (double)h);
-	if (sx >= (int)w) {
-		sx = (int)w - 1;
-	}
-	if (sy >= (int)h) {
-		sy = (int)h - 1;
-	}
-	if (sx < 0 || sy < 0) {
-		return 1.0;
-	}
 	m = (const unsigned char *)cg_dataprovider_bytes(CGImageGetDataProvider(mask), &size);
 	if (m == NULL) {
 		return 1.0;
 	}
-	s = (double)m[(size_t)sy * row + (size_t)sx];
+	/* **AND A MASK THAT IS SCALED IS SAMPLED, NOT PICKED.** Nearest-neighbour was the whole of this sampler, so a
+	 * stencil drawn at a size it was not made for came out BLOCKY — MEASURED: a 16-pixel arrow drawn into a
+	 * 24-point toolbar cell had hard, dithered edges, because every output pixel took the value of one input
+	 * pixel. When the image asks to be interpolated (see `CGImageMaskCreate`), the four samples around the point
+	 * are blended; a 1:1 draw lands exactly on texel centres and is unchanged, which is why this is safe for the
+	 * sizes the table carries natively. */
+	if (CGImageGetShouldInterpolate(mask)) {
+		double fx = u * (double)w - 0.5;
+		double fy = (1.0 - v) * (double)h - 0.5;
+		int x0 = (int)floor(fx);
+		int y0 = (int)floor(fy);
+		double tx = fx - (double)x0;
+		double ty = fy - (double)y0;
+		double s00, s10, s01, s11;
+
+		if (x0 < 0) { x0 = 0; tx = 0.0; }
+		if (y0 < 0) { y0 = 0; ty = 0.0; }
+		if (x0 > (int)w - 1) { x0 = (int)w - 1; tx = 0.0; }
+		if (y0 > (int)h - 1) { y0 = (int)h - 1; ty = 0.0; }
+#define FN_MASK_TEXEL(gx, gy) 		((double)m[(size_t)((gy) > (int)h - 1 ? (int)h - 1 : (gy)) * row + \
+			   (size_t)((gx) > (int)w - 1 ? (int)w - 1 : (gx))])
+		s00 = FN_MASK_TEXEL(x0, y0);
+		s10 = FN_MASK_TEXEL(x0 + 1, y0);
+		s01 = FN_MASK_TEXEL(x0, y0 + 1);
+		s11 = FN_MASK_TEXEL(x0 + 1, y0 + 1);
+#undef FN_MASK_TEXEL
+		s = (s00 * (1.0 - tx) + s10 * tx) * (1.0 - ty) + (s01 * (1.0 - tx) + s11 * tx) * ty;
+	} else {
+		sx = (int)(u * (double)w);
+		sy = (int)((1.0 - v) * (double)h);
+		if (sx >= (int)w) {
+			sx = (int)w - 1;
+		}
+		if (sy >= (int)h) {
+			sy = (int)h - 1;
+		}
+		if (sx < 0 || sy < 0) {
+			return 1.0;
+		}
+		s = (double)m[(size_t)sy * row + (size_t)sx];
+	}
 	/* THE MASK'S OWN DECODE ARRAY RUNS BEFORE THE MASK RULE, because it remaps the SAMPLE and the rule
 	 * then says what that sample means. A mask has one component, so its array is one pair. */
 	if (decode != NULL) {
@@ -4369,10 +4398,16 @@ static void cg_device_bounds(CGContextRef c, CGRect rect, int *left, int *top, i
 			maxy = corner[i].y;
 		}
 	}
-	*left = (int)minx;
-	*top = (int)miny;
-	*right = (int)maxx;
-	*bottom = (int)maxy;
+	/* **THE EDGES ARE ROUNDED OUTWARD, NOT TRUNCATED.** A rectangle whose right edge falls inside a pixel still
+	 * covers that pixel PARTLY, and a sampler that stops at the truncated edge never asks the mask about it — so
+	 * the uncovered column is left with whatever coverage it had, which for `CGContextClipToMask` is "keep
+	 * everything". MEASURED: a template image drawn into a rectangle at x.6 painted a one-pixel vertical line
+	 * down its right edge, at a third of the fill's strength, because the mask was never consulted there. Floor on
+	 * the low edges and ceiling on the high ones is the rule that includes every pixel the rectangle touches. */
+	*left = (int)floor(minx);
+	*top = (int)floor(miny);
+	*right = (int)ceil(maxx);
+	*bottom = (int)ceil(maxy);
 	if (*left < 0) {
 		*left = 0;
 	}

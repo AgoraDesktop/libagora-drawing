@@ -1,3 +1,16 @@
+## A clip mask's edges are rounded OUTWARD
+
+Two things here were MEASURED wrong from a toolbar and fixed together. First, `cg_image_mask_coverage` sampled a
+scaled mask with NEAREST NEIGHBOUR — `(int)(u * width)` and one texel — so a 16-pixel stencil drawn into a 24-point
+cell came out blocky and dithered; it interpolates the four surrounding samples when the image asks for it
+(`CGImageMaskCreate`'s `shouldInterpolate`), and a 1:1 draw still lands on texel centres, so nothing changes at a
+native size. Second, `cg_device_bounds` truncated its device edges with a cast (`(int)maxx`), and that is the one
+conversion both the image sampler and `CGContextClipToMask` use. A rectangle whose right edge lands inside a
+pixel therefore never asked the mask about that last, partly-covered column — and for a clip mask the unsampled
+column keeps "keep everything", so a stencilled fill painted a one-pixel fringe along its right edge. MEASURED on a
+live toolbar: a vertical line beside every icon at a third of the ink's strength. It is `floor` on the low edges and
+`ceil` on the high ones now, which is the rule that includes every pixel the rectangle touches.
+
 # libagora-drawing
 
 **Core Graphics for Agora** — the 2D drawing and geometry model of Agora's Cocoa-compatible stack:
