@@ -17,8 +17,10 @@
  * **TEXT IS VECTOR GLYPH OUTLINES, NOT AN EMBEDDED FONT PROGRAM — YET.** The geometry is exact and scalable, but a
  * consumer cannot select or search the text in this build's output. That is stated rather than implied because it
  * is the one respect in which this writer's output differs from Apple's; embedding the face is the next landing.
- * Gradients, shadings, patterns, shadows, transparency layers and clip-to-mask are REFUSED BY NAME (`CG-REFUSE`),
- * so a caller learns they were not recorded instead of receiving a page that quietly lacks them.
+ * AXIAL AND RADIAL GRADIENTS ARE RECORDED, as PDF shadings with a stitching function built from their stops; a
+ * gradient whose stops carry PER-STOP ALPHA is refused (a DeviceRGB function has no alpha channel and a soft mask
+ * is not written). `CGShading`, patterns, shadows, transparency layers and clip-to-mask are REFUSED BY NAME
+ * (`CG-REFUSE`), so a caller learns they were not recorded instead of receiving a page that quietly lacks them.
  *
  * THE AUXILIARY AND PAGE-INFO DICTIONARIES are Apple's: the keys below, a `CFStringRef` value for each textual
  * field, and a `CFDataRef` wrapping a `CGRect` for each box.

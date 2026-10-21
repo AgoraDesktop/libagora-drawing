@@ -319,6 +319,14 @@ cg_pdf_function *cg_pdf_function_create(cg_pdf_doc *doc, cg_pdf_obj *dict)
 			}
 		}
 		function->inputs = 1;
+		/* **THE STITCHING FUNCTION'S OUTPUT COUNT IS ITS SUB-FUNCTIONS'.** Without this it kept the default
+		 * of ONE output, so a red-to-blue ramp came out red-to-BLACK: only the red channel was copied and the
+		 * green and blue stayed zero. MEASURED by the PDF writer's gradient round trip; poppler drew the same
+		 * file correctly because the file was right. */
+		function->outputs = function->sub[0]->outputs;
+		if (cg_pdf_dict_get(doc, dict, "Range") == NULL) {
+			fn_default(function->range, function->outputs, 0.0, 1.0);
+		}
 		return function;
 	}
 

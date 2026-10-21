@@ -5015,7 +5015,10 @@ void CGContextDrawLinearGradient(CGContextRef c, CGGradientRef gradient, CGPoint
 	cg_gradient_draw gd;
 
 	if (c != NULL && c->writer != NULL) {
-		cg_pdf_writer_refuse(c->writer, "gradients (CGContextDrawLinearGradient)");
+		cg_pdf_paint_state ps;
+
+		fn_pdf_paint_state(c, &ps);
+		(void)cg_pdf_writer_gradient(c->writer, gradient, false, startPoint, 0, endPoint, 0, options, &ps);
 		return;
 	}
 
@@ -5043,7 +5046,11 @@ void CGContextDrawRadialGradient(CGContextRef c, CGGradientRef gradient, CGPoint
 	cg_gradient_draw gd;
 
 	if (c != NULL && c->writer != NULL) {
-		cg_pdf_writer_refuse(c->writer, "gradients (CGContextDrawRadialGradient)");
+		cg_pdf_paint_state ps;
+
+		fn_pdf_paint_state(c, &ps);
+		(void)cg_pdf_writer_gradient(c->writer, gradient, true, startCenter, startRadius, endCenter,
+					     endRadius, options, &ps);
 		return;
 	}
 

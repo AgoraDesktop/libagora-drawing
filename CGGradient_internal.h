@@ -36,6 +36,12 @@
 CGGradientRef cg_gradient_create_with_colors(CGColorSpaceRef space, CGColorRef *colors, size_t count,
 					     const CGFloat *locations);
 
+/* **THE STOPS, FOR A CALLER THAT MUST WRITE THE RAMP DOWN RATHER THAN PAINT IT.** The PDF writer is that caller:
+ * a gradient becomes a stitching function whose pieces are its stops, so the table is the interface. The colours
+ * are already device RGB with straight alpha, which is what `cg_stop` holds. */
+size_t cg_gradient_stop_count(CGGradientRef gradient);
+void cg_gradient_stop(CGGradientRef gradient, size_t index, CGFloat *location, CGFloat rgba[4]);
+
 /* THE THREE RAMPS. Each writes the colour of USER-space (x, y) into `rgba`, or four zeros when the
  * options leave that point unpainted. `rgba` arrives whatever the caller's painter put there, so
  * every path through these writes it. */

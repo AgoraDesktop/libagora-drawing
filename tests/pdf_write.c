@@ -183,6 +183,30 @@ static CFDataRef fn_build_pdf(void)
 	CGContextSetRGBFillColor(ctx, 0, 1, 0, 1);
 	CGContextFillRect(ctx, CGRectMake(140, 40, 60, 40));
 	CGContextRestoreGState(ctx);
+
+	/* AN OPAQUE AXIAL GRADIENT, inside its own clip: red at the left end and blue at the right, and nothing
+	 * outside the clip. The stops are the ramp a PDF stitching function is built from. */
+	{
+		CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+		const CGFloat components[8] = { 1, 0, 0, 1,  0, 0, 1, 1 };
+		const CGFloat locations[2] = { 0, 1 };
+		CGGradientRef gradient = CGGradientCreateWithColorComponents(space, components, locations, 2);
+
+		if (gradient != NULL) {
+			CGContextSaveGState(ctx);
+			CGContextClipToRect(ctx, CGRectMake(140, 75, 50, 20));
+			CGContextDrawLinearGradient(ctx, gradient, CGPointMake(140, 85), CGPointMake(190, 85), 0);
+			CGContextRestoreGState(ctx);
+			CGContextSaveGState(ctx);
+			CGContextClipToRect(ctx, CGRectMake(100, 60, 30, 30));
+			CGContextDrawRadialGradient(ctx, gradient, CGPointMake(115, 75), 0, CGPointMake(115, 75), 15, 0);
+			CGContextRestoreGState(ctx);
+			CGGradientRelease(gradient);
+		} else {
+			CHECK(0, "the gradient fixture was refused");
+		}
+		CGColorSpaceRelease(space);
+	}
 	CGPDFContextEndPage(ctx);
 
 	/* PAGE TWO, with its own media box in the page-info dictionary. */
@@ -277,6 +301,13 @@ static void fn_check_page_one(CGPDFDocumentRef document)
 		CHECK(probe.count > 0, "the page's /Font dictionary is empty");
 		CHECK(probe.type0 > 0, "the written text is not a Type0 font");
 		CHECK(probe.embedded > 0, "the written font has no embedded /FontFile2");
+		{
+			CGPDFDictionaryRef shadings = NULL;
+
+			CHECK(CGPDFDictionaryGetDictionary(resources, "Shading", &shadings) &&
+			      CGPDFDictionaryGetCount(shadings) >= 1,
+			      "the page carries no /Shading resource for its gradient");
+		}
 	}
 	{
 		CGPDFDictionaryRef page_dict = CGPDFPageGetDictionary(page);
@@ -302,6 +333,17 @@ static void fn_check_page_one(CGPDFDocumentRef document)
 					}
 				}
 				CHECK(has_tj, "the written text was recorded as OUTLINES, not a Tj operator");
+				{
+					int has_sh = 0;
+
+					for (i = 0; i + 3 <= length; i++) {
+						if (text[i] == ' ' && text[i + 1] == 's' && text[i + 2] == 'h') {
+							has_sh = 1;
+							break;
+						}
+					}
+					CHECK(has_sh, "the gradient was not recorded as a `sh` operator");
+				}
 				CFRelease(bytes);
 			}
 		}
@@ -363,6 +405,23 @@ static void fn_check_page_one(CGPDFDocumentRef document)
 		CHECK(body_ink, "the composite glyph's base letter produced no ink");
 		CHECK(accent_ink, "the composite glyph's accent produced no ink — its component was not subsetted");
 	}
+
+	/* THE GRADIENT: red near its start, blue near its end, and unpainted one point left of the clip. */
+	pixel_at(buffer, 200, 100, CGPointMake(145, 85), px);
+	CHECK(px[3] > 200 && px[2] > 150 && px[0] < 120,
+	      "the gradient's start is B=%u G=%u R=%u A=%u, expected red", px[0], px[1], px[2], px[3]);
+	pixel_at(buffer, 200, 100, CGPointMake(185, 85), px);
+	CHECK(px[3] > 200 && px[0] > 150 && px[2] < 120,
+	      "the gradient's end is B=%u G=%u R=%u A=%u, expected blue", px[0], px[1], px[2], px[3]);
+	pixel_at(buffer, 200, 100, CGPointMake(135, 85), px);
+	CHECK(px[3] < 20, "the gradient was painted outside its clip (A=%u)", px[3]);
+	/* THE RADIAL GRADIENT: red at its centre, blue toward its outer circle. */
+	pixel_at(buffer, 200, 100, CGPointMake(115, 75), px);
+	CHECK(px[3] > 200 && px[2] > 150 && px[0] < 120,
+	      "the radial gradient's centre is B=%u G=%u R=%u A=%u, expected red", px[0], px[1], px[2], px[3]);
+	pixel_at(buffer, 200, 100, CGPointMake(115, 88), px);
+	CHECK(px[3] > 200 && px[0] > 150 && px[2] < 120,
+	      "the radial gradient's edge is B=%u G=%u R=%u A=%u, expected blue", px[0], px[1], px[2], px[3]);
 
 	pixel_at(buffer, 200, 100, CGPointMake(80, 20), px);
 	/* THE DESTINATION IS PREMULTIPLIED, so a 50% red over transparent is R=A=128, not R=255. */

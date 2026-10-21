@@ -31,6 +31,7 @@
 #include <CoreGraphics/CGImage_internal.h>
 #include <CoreGraphics/CGFont_internal.h>
 #include <CoreGraphics/CGPDFSubset.h>
+#include <CoreGraphics/CGGradient_internal.h>
 
 #include <zlib.h>
 
@@ -39,6 +40,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+/* A PDF stitching function is a handful of segments; this is far past any real ramp the CG object holds. */
+#define CG_PDF_GRADIENT_MAX 256
 
 /* ------------------------------------------------------------------------- */
 /* byte buffers                                                              */
@@ -203,6 +207,9 @@ struct cg_pdf_writer {
 	struct cg_pdf_resource *images;
 	size_t image_count;
 	size_t image_cap;
+	struct cg_pdf_resource *shadings;
+	size_t shading_count;
+	size_t shading_cap;
 	struct cg_pdf_gstate *gstates;
 	size_t gstate_count;
 	size_t gstate_cap;
@@ -466,6 +473,7 @@ void cg_pdf_writer_end_page(struct cg_pdf_writer *w)
 
 	fn_buf_printf(&resources, "/ProcSet [/PDF] ");
 	fn_build_resource_dict(&resources, "XObject", w->images, w->image_count);
+	fn_build_resource_dict(&resources, "Shading", w->shadings, w->shading_count);
 	fn_build_gstate_dict(&resources, w->gstates, w->gstate_count);
 	if (w->font_count > 0) {
 		size_t f;
@@ -1065,6 +1073,169 @@ void cg_pdf_writer_image(struct cg_pdf_writer *w, CGRect rect, CGImageRef image,
 	fn_emit_gstate(w, paint, true, false);
 	fn_content_printf(w, "%.4f 0 0 %.4f %.4f %.4f cm\n/%s Do\nQ\n", (double)rect.size.width,
 			  (double)rect.size.height, (double)rect.origin.x, (double)rect.origin.y, name);
+}
+
+/* ------------------------------------------------------------------------- */
+/* gradients, as PDF shadings                                                 */
+/* ------------------------------------------------------------------------- */
+
+static void fn_gradient_segment(struct cg_pdf_writer *w, unsigned *function_objects, size_t *segment_count,
+				const CGFloat c0[3], const CGFloat c1[3], cg_buf *bounds, cg_buf *encode)
+{
+	unsigned object = fn_new_object(w);
+
+	if (object == 0) {
+		return;
+	}
+	fn_object_printf(w, object,
+			 "<< /FunctionType 2 /Domain [0 1] /C0 [%.4f %.4f %.4f] /C1 [%.4f %.4f %.4f] /N 1 >>",
+			 (double)c0[0], (double)c0[1], (double)c0[2], (double)c1[0], (double)c1[1],
+			 (double)c1[2]);
+	if (function_objects != NULL) {
+		function_objects[*segment_count] = object;
+	}
+	(*segment_count)++;
+	fn_buf_put(encode, "0 1 ", 4);
+}
+
+bool cg_pdf_writer_gradient(struct cg_pdf_writer *w, CGGradientRef gradient, bool radial, CGPoint start0,
+			    CGFloat radius0, CGPoint start1, CGFloat radius1,
+			    CGGradientDrawingOptions options, const cg_pdf_paint_state *paint)
+{
+	size_t count;
+	size_t i;
+	CGFloat locations[CG_PDF_GRADIENT_MAX];
+	CGFloat colours[CG_PDF_GRADIENT_MAX][3];
+	size_t kept = 0;
+	unsigned functions[CG_PDF_GRADIENT_MAX + 2];
+	size_t segments = 0;
+	cg_buf bounds = { 0 };
+	cg_buf encode = { 0 };
+	cg_buf function_list = { 0 };
+	unsigned stitch;
+	unsigned shading;
+	char name[24];
+	cg_pdf_paint_state gs_paint;
+
+	if (w == NULL || gradient == NULL || paint == NULL) {
+		return false;
+	}
+	if (!w->page_open) {
+		fprintf(stderr, "CG-REFUSE: a gradient on a CGPDFContext with no page open was not recorded\n");
+		return false;
+	}
+	count = cg_gradient_stop_count(gradient);
+	if (count < 2 || count > CG_PDF_GRADIENT_MAX) {
+		cg_pdf_writer_refuse(w, "a gradient with an unusable stop count");
+		return false;
+	}
+	/* PER-STOP ALPHA NEEDS A SOFT MASK, and a DeviceRGB function has no channel for it. The whole gradient is
+	 * refused rather than drawn at the wrong opacity. */
+	for (i = 0; i < count; i++) {
+		CGFloat rgba[4];
+
+		cg_gradient_stop(gradient, i, NULL, rgba);
+		if (rgba[3] < 0.999) {
+			cg_pdf_writer_refuse(w, "a gradient with per-stop alpha (a soft mask)");
+			return false;
+		}
+	}
+	/* THE STOPS, WITH DUPLICATE LOCATIONS COLLAPSED TO THE LATER COLOUR — a zero-width interval is a step, not
+	 * a ramp, and a PDF stitching function's /Bounds must increase. */
+	for (i = 0; i < count; i++) {
+		CGFloat location;
+		CGFloat rgba[4];
+
+		cg_gradient_stop(gradient, i, &location, rgba);
+		if (kept > 0 && location <= locations[kept - 1]) {
+			colours[kept - 1][0] = rgba[0];
+			colours[kept - 1][1] = rgba[1];
+			colours[kept - 1][2] = rgba[2];
+			continue;
+		}
+		locations[kept] = location;
+		colours[kept][0] = rgba[0];
+		colours[kept][1] = rgba[1];
+		colours[kept][2] = rgba[2];
+		kept++;
+	}
+	if (kept == 0) {
+		return false;
+	}
+	/* BEFORE THE FIRST STOP AND AFTER THE LAST ARE CONSTANT COLOUR, which is what the CG ramp does; the
+	 * shading's own /Extend covers the axes outside the two points. */
+	if (kept == 1 || locations[0] > 0.0) {
+		fn_gradient_segment(w, functions, &segments, colours[0], colours[0], &bounds, &encode);
+	}
+	for (i = 0; i + 1 < kept; i++) {
+		if (i > 0 || locations[0] > 0.0) {
+			fn_buf_printf(&bounds, "%.4f ", (double)locations[i]);
+		}
+		fn_gradient_segment(w, functions, &segments, colours[i], colours[i + 1], &bounds, &encode);
+	}
+	if (kept > 1 && locations[kept - 1] < 1.0) {
+		fn_buf_printf(&bounds, "%.4f ", (double)locations[kept - 1]);
+		fn_gradient_segment(w, functions, &segments, colours[kept - 1], colours[kept - 1], &bounds, &encode);
+	}
+	if (segments == 0) {
+		fn_buf_free(&bounds);
+		fn_buf_free(&encode);
+		return false;
+	}
+	fn_buf_printf(&function_list, "[");
+	for (i = 0; i < segments; i++) {
+		fn_buf_printf(&function_list, "%u 0 R ", functions[i]);
+	}
+	fn_buf_printf(&function_list, "]");
+	stitch = fn_new_object(w);
+	if (stitch == 0) {
+		fn_buf_free(&bounds);
+		fn_buf_free(&encode);
+		fn_buf_free(&function_list);
+		return false;
+	}
+	fn_object_printf(w, stitch,
+			 "<< /FunctionType 3 /Domain [0 1] /Functions %s /Bounds [%s] /Encode [%s] >>",
+			 function_list.data != NULL ? (const char *)function_list.data : "[]",
+			 bounds.data != NULL ? (const char *)bounds.data : "",
+			 encode.data != NULL ? (const char *)encode.data : "");
+	fn_buf_free(&bounds);
+	fn_buf_free(&encode);
+	fn_buf_free(&function_list);
+
+	shading = fn_new_object(w);
+	if (shading == 0) {
+		return false;
+	}
+	{
+		const char *extend_before = (options & kCGGradientDrawsBeforeStartLocation) ? "true" : "false";
+		const char *extend_after = (options & kCGGradientDrawsAfterEndLocation) ? "true" : "false";
+
+		if (radial) {
+			fn_object_printf(w, shading,
+					 "<< /ShadingType 3 /ColorSpace /DeviceRGB /Coords [%.4f %.4f %.4f "
+					 "%.4f %.4f %.4f] /Function %u 0 R /Extend [%s %s] >>",
+					 (double)start0.x, (double)start0.y, (double)radius0, (double)start1.x,
+					 (double)start1.y, (double)radius1, stitch, extend_before, extend_after);
+		} else {
+			fn_object_printf(w, shading,
+					 "<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [%.4f %.4f %.4f "
+					 "%.4f] /Function %u 0 R /Extend [%s %s] >>",
+					 (double)start0.x, (double)start0.y, (double)start1.x, (double)start1.y,
+					 stitch, extend_before, extend_after);
+		}
+	}
+	snprintf(name, sizeof name, "Sh%u", shading);
+	fn_resource_add(&w->shadings, &w->shading_count, &w->shading_cap, name, shading);
+
+	/* THE GRADIENT'S OWN COLOURS ARE OPAQUE, so only the CONTEXT's alpha and blend apply. */
+	gs_paint = *paint;
+	gs_paint.fill[3] = 1.0;
+	gs_paint.stroke[3] = 1.0;
+	fn_content_printf(w, "q\n");
+	fn_emit_gstate(w, &gs_paint, true, false);
+	fn_content_printf(w, "/%s sh\nQ\n", name);
+	return true;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1866,6 +2037,7 @@ void cg_pdf_writer_free(struct cg_pdf_writer *w)
 	free(w->objects);
 	free(w->pages);
 	free(w->images);
+	free(w->shadings);
 	free(w->gstates);
 	{
 		size_t f;

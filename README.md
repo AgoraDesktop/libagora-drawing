@@ -166,8 +166,10 @@ been converted back to CF", with lcms2 "not installed on this machine").
   `/Type1C` route here, and a CID-keyed CFF cannot be a simple Type 1 font, so both fall back to outlines; the
   writer names that fallback when it happens. CFF programs are embedded whole rather than subsetted. TrueType
   subsetting keeps the glyphs and their composites, not the shaping tables (`GSUB`, `GPOS`, `kern`) — a PDF places
-  every glyph explicitly, so those cannot affect the page. The PDF context also REFUSES BY NAME gradients, shadings, patterns, shadows, transparency layers and
-  clip-to-mask, so a caller knows when a page lacks them.
+  every glyph explicitly, so those cannot affect the page. **AXIAL AND RADIAL GRADIENTS ARE RECORDED** as PDF
+  shadings whose stitching function is built from the gradient's stops; a gradient with PER-STOP ALPHA is refused
+  (no alpha channel in a DeviceRGB function, and no soft mask is written). The PDF context still REFUSES BY NAME
+  `CGShading`, patterns, shadows, transparency layers and clip-to-mask, so a caller knows when a page lacks them.
 - **PDF encryption is reported, not decrypted.** `CGPDFDocumentIsEncrypted` answers true and the pages, catalog and
   info refuse by name; `IsUnlocked` is therefore false for an encrypted file and there is no password door.
 - **The scanner skips inline images rather than parsing them**, so the renderer does not draw them either, and

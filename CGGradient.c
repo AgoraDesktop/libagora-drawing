@@ -217,6 +217,27 @@ void CGGradientRelease(CGGradientRef gradient)
  * ramp is walked once per pixel, so the walk's cost is real — but a binary search would need the
  * locations sorted, which they are, and the branch that its `count == 1` guard protects is exactly
  * the branch a first version of this got wrong. Kept simple and obviously right. */
+size_t cg_gradient_stop_count(CGGradientRef gradient)
+{
+	return gradient != NULL ? gradient->count : 0;
+}
+
+void cg_gradient_stop(CGGradientRef gradient, size_t index, CGFloat *location, CGFloat rgba[4])
+{
+	if (gradient == NULL || index >= gradient->count) {
+		return;
+	}
+	if (location != NULL) {
+		*location = gradient->stop[index].location;
+	}
+	if (rgba != NULL) {
+		rgba[0] = gradient->stop[index].rgba[0];
+		rgba[1] = gradient->stop[index].rgba[1];
+		rgba[2] = gradient->stop[index].rgba[2];
+		rgba[3] = gradient->stop[index].rgba[3];
+	}
+}
+
 static void cg_ramp_sample(CGGradientRef g, CGFloat t, CGFloat rgba[4])
 {
 	size_t i;
