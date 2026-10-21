@@ -401,17 +401,25 @@ static void cg_flatten_cubic(CGMutablePathRef out, const double *p, double flat,
 
 /* A QUADRATIC IS A CUBIC WHOSE CONTROLS ARE TWO THIRDS OF THE WAY TO THE SHOULDER, and
  * raising the degree here instead of writing a second subdivision means there is one
- * flattener to be right rather than two to agree. */
-static void cg_quad_as_cubic(const double *q, double *p)
+ * flattener to be right rather than two to agree.
+ *
+ * **THE START POINT IS AN ARGUMENT BECAUSE THE ELEMENT DOES NOT CARRY ONE.** A quad element is
+ * `pto`'s two points — the control and the end — and the start is the path's current point, which
+ * the caller already has. THIS FUNCTION USED TO READ THE START FROM `q[4]` AND `q[5]`, PAST THE END
+ * OF A FOUR-DOUBLE ELEMENT: MEASURED, a `(10,10) quad (50,90) (90,10)` answered a bounding box of
+ * `(0,0 53x21)` and FILLED NOTHING, and every TrueType glyph outline this tree drew through
+ * `CGContextAddQuadCurveToPoint` came out as control points borrowed from the next element's memory.
+ * The four points of a cubic are start, two controls, end — and the start is the caller's. */
+static void cg_quad_as_cubic(const double *start, const double *q, double *p)
 {
-	p[0] = q[0];
-	p[1] = q[1];
-	p[2] = q[0] + 2.0 / 3.0 * (q[2] - q[0]);
-	p[3] = q[1] + 2.0 / 3.0 * (q[3] - q[1]);
-	p[4] = q[4] + 2.0 / 3.0 * (q[2] - q[4]);
-	p[5] = q[5] + 2.0 / 3.0 * (q[3] - q[5]);
-	p[6] = q[4];
-	p[7] = q[5];
+	p[0] = start[0];
+	p[1] = start[1];
+	p[2] = start[0] + 2.0 / 3.0 * (q[0] - start[0]);
+	p[3] = start[1] + 2.0 / 3.0 * (q[1] - start[1]);
+	p[4] = q[2] + 2.0 / 3.0 * (q[0] - q[2]);
+	p[5] = q[3] + 2.0 / 3.0 * (q[1] - q[3]);
+	p[6] = q[2];
+	p[7] = q[3];
 }
 
 CGPathRef CGPathCreateCopyByFlattening(CGPathRef cpath, CGFloat flatness)
@@ -441,17 +449,13 @@ CGPathRef CGPathCreateCopyByFlattening(CGPathRef cpath, CGFloat flatness)
 		case kCGPathElementAddQuadCurveToPoint:
 		{
 			double p[8];
-
-			cg_quad_as_cubic(e->pts, p);
 			/* THE SUBDIVISION STARTS FROM THE CURVE'S START POINT, which is the path's
 			 * current point at this element — read from the output path rather than
 			 * tracked, so there is one answer to where the pen is. */
-			{
-				CGPoint cur = CGPathGetCurrentPoint((CGPathRef)out);
+			CGPoint cur = CGPathGetCurrentPoint((CGPathRef)out);
+			double start[2] = { cur.x, cur.y };
 
-				p[0] = cur.x;
-				p[1] = cur.y;
-			}
+			cg_quad_as_cubic(start, e->pts, p);
 			cg_flatten_cubic(out, p, flat, 0);
 			break;
 		}

@@ -388,6 +388,86 @@ static int case_path(void)
 	return g_fail - before;
 }
 
+
+/* **A QUADRATIC'S BOXES AND ITS FILL, WHICH IS THE CASE `cg_quad_as_cubic` OWED.** The conversion that raises a
+ * quad to a cubic read the START POINT from the element's fifth and sixth doubles — past the four it has — so the
+ * control points came out of whatever memory followed. MEASURED before the fix: this arc's tight box was
+ * `(0,0 53x21)`, it should be `(10,10 80x40)`, and FILLING IT PAINTED NOTHING. TrueType glyph outlines reach this
+ * code through `CGContextAddQuadCurveToPoint`, so every such glyph was wrong; the case is written against the
+ * generic curve door so it does not depend on a font.
+ *
+ * BOTH BOXES ARE ASKED FOR because they answer different questions: `CGPathGetBoundingBox` INCLUDES the control
+ * point (height 80), while `CGPathGetPathBoundingBox` is the tight curve (height 40). A fix that clamped the
+ * control into the element would pass the first and fail the second. */
+static int case_quad_curve(void)
+{
+	int before = g_fail;
+	const size_t width = 100, height = 100, bpr = width * 4;
+	unsigned char *buffer = (unsigned char *)calloc(height, bpr);
+	CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+	CGContextRef ctx;
+	CGFloat cpx = 50, cpy = 90, x = 90, y = 10;
+	CGRect loose;
+	CGRect tight;
+	CGPoint inside = { 50.0, 30.0 };
+	CGPoint outside = { 50.0, 70.0 };
+
+	check(buffer != NULL && rgb != NULL, "the quad case could not allocate");
+	if (buffer == NULL || rgb == NULL) {
+		free(buffer);
+		CGColorSpaceRelease(rgb);
+		return g_fail - before;
+	}
+	ctx = CGBitmapContextCreate(buffer, width, height, 8, bpr, rgb,
+				    kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+	if (ctx == NULL) {
+		check(0, "the quad case's context was refused");
+		free(buffer);
+		CGColorSpaceRelease(rgb);
+		return g_fail - before;
+	}
+	CGContextBeginPath(ctx);
+	CGContextMoveToPoint(ctx, 10, 10);
+	CGContextAddQuadCurveToPoint(ctx, cpx, cpy, x, y);
+	tight = CGContextGetPathBoundingBox(ctx);
+	check(tight.origin.x == 10 && tight.origin.y == 10 && tight.size.width == 80 &&
+	      tight.size.height == 40,
+	      "the quad's tight box is (%g,%g) %gx%g, want (10,10) 80x40", (double)tight.origin.x,
+	      (double)tight.origin.y, (double)tight.size.width, (double)tight.size.height);
+	{
+		CGPathRef copy = CGContextCopyPath(ctx);
+
+		loose = copy != NULL ? CGPathGetBoundingBox(copy) : CGRectNull;
+		if (copy != NULL) {
+			CGPathRelease(copy);
+		}
+	}
+	check(loose.origin.x == 10 && loose.origin.y == 10 && loose.size.width == 80 &&
+	      loose.size.height == 80,
+	      "the quad's control-inclusive box is (%g,%g) %gx%g, want (10,10) 80x80",
+	      (double)loose.origin.x, (double)loose.origin.y, (double)loose.size.width,
+	      (double)loose.size.height);
+
+	CGContextSetRGBFillColor(ctx, 1, 0, 0, 1);
+	CGContextFillPath(ctx);
+	{
+		/* the point (50,30) is under the arch; the point (50,70) is above it */
+		const unsigned char *in = buffer + ((size_t)(height - 1 - (size_t)inside.y) * width +
+						    (size_t)inside.x) * 4;
+		const unsigned char *out = buffer + ((size_t)(height - 1 - (size_t)outside.y) * width +
+						     (size_t)outside.x) * 4;
+
+		check(in[3] > 200 && in[2] > 200 && in[0] < 60 && in[1] < 60,
+		      "the quad did not fill under its arch (B=%u G=%u R=%u A=%u)", in[0], in[1], in[2], in[3]);
+		check(out[3] < 20, "the quad filled above its arch (A=%u)", out[3]);
+	}
+
+	CGContextRelease(ctx);
+	CGColorSpaceRelease(rgb);
+	free(buffer);
+	return g_fail - before;
+}
+
 /* ------------------------------------------------------------------------ */
 /* the sweep, and the shapes a band has to be read at both ends of           */
 /* ------------------------------------------------------------------------ */
@@ -2423,6 +2503,7 @@ static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	  case_consumer_and_gradient },
 	{ "A bitmap context whose fill reaches the pixels", case_bitmap_context_fill },
 	{ "A path: empty, contains, and its box", case_path },
+	{ "A quadratic's two boxes and the ink under its arch", case_quad_curve },
 	{ "A triangle fills as a triangle, and its mirror mirrors it", case_triangle_fill },
 	{ "A font made from bytes", case_font_from_provider },
 	{ "A gradient painted into a context", case_gradient_into_context },
