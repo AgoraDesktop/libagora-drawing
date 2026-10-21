@@ -144,6 +144,19 @@ static CFDataRef fn_build_pdf(void)
 		CGContextSetRGBFillColor(ctx, 0, 0, 0, 1);
 		CGContextSetTextPosition(ctx, 20, 60);
 		CGContextShowText(ctx, "Hi", 2);
+		/* **A COMPOSITE GLYPH, because `é` is drawn from `e` plus `acute` and the subsetter must carry both
+		 * components and rewrite their indices.** The ink above the baseline is the accent; if only the base
+		 * letter arrived the upper box stays empty. */
+		{
+			CGGlyph glyph = CGFontGetGlyphWithGlyphName(font, CFSTR("eacute"));
+
+			if (glyph != 0 && glyph != (CGGlyph)kCGFontIndexInvalid) {
+				CGContextSetTextPosition(ctx, 20, 80);
+				CGContextShowGlyphs(ctx, &glyph, 1);
+			} else {
+				CHECK(0, "Liberation Sans has no `eacute` glyph to test the composite closure with");
+			}
+		}
 		CGFontRelease(font);
 	} else {
 		CHECK(0, "no Helvetica for the PDF context's text");
@@ -330,6 +343,26 @@ static void fn_check_page_one(CGPDFDocumentRef document)
 	      "the image's alpha half is not opaque red (B=%u G=%u R=%u A=%u)", px[0], px[1], px[2], px[3]);
 	pixel_at(buffer, 200, 100, CGPointMake(155, 15), px);
 	CHECK(px[3] < 30, "the image's transparent half was painted (A=%u)", px[3]);
+
+	{
+		int accent_ink = 0;
+		int body_ink = 0;
+
+		for (x = 20; x < 40; x++) {
+			for (y = 80; y < 97; y++) {
+				pixel_at(buffer, 200, 100, CGPointMake((CGFloat)x, (CGFloat)y), px);
+				if (px[3] > 100 && px[0] < 100 && px[1] < 100 && px[2] < 100) {
+					if (y >= 91) {
+						accent_ink = 1;
+					} else {
+						body_ink = 1;
+					}
+				}
+			}
+		}
+		CHECK(body_ink, "the composite glyph's base letter produced no ink");
+		CHECK(accent_ink, "the composite glyph's accent produced no ink — its component was not subsetted");
+	}
 
 	pixel_at(buffer, 200, 100, CGPointMake(80, 20), px);
 	/* THE DESTINATION IS PREMULTIPLIED, so a 50% red over transparent is R=A=128, not R=255. */

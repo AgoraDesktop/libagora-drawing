@@ -86,8 +86,10 @@ carry alpha, alpha and blend become /ExtGState, and clips and `q`/`Q` are the PD
 begun and ended explicitly and carry their own /MediaBox; `Close` writes the header, objects, classic xref and
 trailer through the caller's CGDataConsumer. **TEXT IS EMBEDDED WHEN THE FACE CAN BE**: a TrueType/`glyf` program
 becomes a Type0/CIDFontType2 font with Identity-H and a /ToUnicode CMap, so the page's text is selectable and
-searchable at any scale (the WHOLE program is embedded, not a subset — a small page can therefore carry a large
-font, and subsetting is a later landing); a CFF or program-less face falls back to exact vector OUTLINES, and the writer says which
+searchable at any scale. **THE PROGRAM IS SUBSETTED**: only the glyphs the document used, their composite
+components and `.notdef` are kept, renumbered, and named through a `/CIDToGIDMap`; the content streams carry CIDs,
+so the renumbering never rewrites a page. A two-glyph page's font is a few kilobytes rather than the whole face,
+and `pdffonts` reports the six-letter subset tag; a CFF or program-less face falls back to exact vector OUTLINES, and the writer says which
 it did. MEASURED
 (tests/pdf_write.c): a two-page document drawn, closed, reopened by this library's own reader, and rendered by
 its own renderer — rectangle, text ink, an opaque image's samples, an alpha image's transparent half, a /ca 0.5
@@ -157,7 +159,8 @@ been converted back to CF", with lcms2 "not installed on this machine").
 
 - **PDF EMBEDS TRUETYPE, NOT CFF.** A face whose outlines are CFF or Type 1 has no program a CIDFontType2 may
   point at, so its text is written as outlines and cannot be selected; the writer names that fallback when it
-  happens. The PDF context also REFUSES BY NAME gradients, shadings, patterns, shadows, transparency layers and
+  happens. Subsetting keeps the glyphs and their composites, not the shaping tables (`GSUB`, `GPOS`, `kern`) — a
+  PDF places every glyph explicitly, so those cannot affect the page. The PDF context also REFUSES BY NAME gradients, shadings, patterns, shadows, transparency layers and
   clip-to-mask, so a caller knows when a page lacks them.
 - **PDF encryption is reported, not decrypted.** `CGPDFDocumentIsEncrypted` answers true and the pages, catalog and
   info refuse by name; `IsUnlocked` is therefore false for an encrypted file and there is no password door.
