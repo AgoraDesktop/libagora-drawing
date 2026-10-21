@@ -45,3 +45,13 @@ add_test(NAME pdf COMMAND pdf)
 
 set_tests_properties(pdf PROPERTIES ENVIRONMENT
   "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")
+
+# THE PDF CONTEXT'S ROUND TRIP: draw into a CGPDFContext, close it, reopen it with CGPDFDocument, render it with
+# CGContextDrawPDFPage and read the pixels back. The writer and the reader are proved against each other.
+add_executable(pdf_write pdf_write.c)
+target_link_libraries(pdf_write PRIVATE Drawing CoreFoundation::CoreFoundation)
+
+add_test(NAME pdf-write COMMAND pdf_write)
+
+set_tests_properties(pdf-write PROPERTIES ENVIRONMENT
+  "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")

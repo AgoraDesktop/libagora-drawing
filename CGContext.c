@@ -50,6 +50,7 @@
 #include <CoreGraphics/CGPaint_internal.h>
 #include <CoreGraphics/CGPattern_internal.h>
 #include <CoreGraphics/CGShading_internal.h>
+#include <CoreGraphics/CGPDFWriter_internal.h>
 
 /* THE RENAME TABLE FOR THE THREE PATH OPERATIONS THAT ARE OURS NOW (2026-10-05) — the public
  * declarations went with the era decision and the code lives under the names in CGPath_internal.h;
@@ -177,6 +178,10 @@ typedef struct cg_state {
 struct CGContext {
 	int refcount;
 	int is_bitmap;
+	/* NON-NULL FOR A PDF CONTEXT: the recorder this context's drawing calls are said to instead of being
+	 * rasterized. A PDF context still has a 1x1 pixman surface so the dozen doors that ask `c->data` keep
+	 * their ordinary shape; every painting door checks this pointer before touching it. */
+	struct cg_pdf_writer *writer;
 	/* THE CALLER'S RELEASE CALLBACK AND ITS info FIELD, or NULL. Apple's header says the callback is
 	 * called when the context is freed, with releaseInfo and data as arguments -- and THE DATA IS STILL
 	 * THE CONTEXT'S TO FREE IF IT ALLOCATED IT, because the callback and the free are two promises. */
@@ -214,6 +219,31 @@ struct CGContext {
 
 	struct CGPath *path;
 };
+
+/* THE RECORDER'S VIEW OF THE GRAPHICS STATE, taken at the moment something is painted. The writer emits it
+ * with the operator rather than mirroring every setter, which is what keeps its content stream in step with
+ * `q`/`Q` without a second state machine. */
+static void fn_pdf_paint_state(CGContextRef c, cg_pdf_paint_state *ps)
+{
+	size_t i;
+
+	memset(ps, 0, sizeof *ps);
+	for (i = 0; i < 4; i++) {
+		ps->fill[i] = c->state.rgba[i];
+		ps->stroke[i] = c->state.stroke_rgba[i];
+	}
+	ps->alpha = c->state.alpha;
+	ps->blend = c->state.blend;
+	ps->line_width = c->state.line_width;
+	ps->miter_limit = c->state.miter_limit;
+	ps->cap = (int)c->state.line_cap;
+	ps->join = (int)c->state.line_join;
+	ps->dash_count = (size_t)c->state.dash_count;
+	for (i = 0; i < ps->dash_count && i < 16; i++) {
+		ps->dash[i] = c->state.dash[i];
+	}
+	ps->dash_phase = c->state.dash_phase;
+}
 
 /* FORWARD, BECAUSE THE COLOUR SETTERS COME FIRST IN THIS FILE AND THE PATTERN THEY MUST CLEAR IS
  * DEFINED WITH THE REST OF C6.3'S PAINT CODE, well below them. The rule it implements — a later paint
@@ -701,7 +731,69 @@ void CGContextRelease(CGContextRef c)
 	if (c->owns_data) {
 		free(c->data);
 	}
+	if (c->writer != NULL) {
+		cg_pdf_writer_free(c->writer);
+		c->writer = NULL;
+	}
 	free(c);
+}
+
+/* ------------------------------------------------------------------------- */
+/* a context with no surface                                                 */
+/* ------------------------------------------------------------------------- */
+
+/* **THE PDF CONTEXT IS A `CGContext` WHOSE SURFACE IS ONE PIXEL AND NEVER RECEIVED.** The surface exists because
+ * `cg_text_can_draw` and `CGContextDrawImage` ask `c->data` whether there is anywhere to draw, and a context that
+ * answered "no" would refuse the text a PDF context is FOR. Every painting door checks `c->writer` first and
+ * records; the 1x1 image is the fallback that turns a missed hook into a discarded pixel rather than a crash. */
+CGContextRef cg_context_create_pdf(struct cg_pdf_writer *writer)
+{
+	CGContextRef c;
+
+	if (writer == NULL) {
+		return NULL;
+	}
+	c = calloc(1, sizeof *c);
+	if (c == NULL) {
+		return NULL;
+	}
+	c->refcount = 1;
+	c->is_bitmap = 0;
+	c->writer = writer;
+	c->width = 1;
+	c->height = 1;
+	c->stride = 4;
+	cg_state_init_full(&c->state, 1, 1);
+	c->state.ctm = CGAffineTransformIdentity;
+	c->path = CGPathCreateMutable();
+	c->allows_antialiasing = 1;
+	c->allows_subpixel_positioning = 1;
+	c->allows_font_smoothing = 1;
+	c->state.should_subpixel_position_fonts = 1;
+	c->state.should_smooth_fonts = 1;
+	c->owns_data = 1;
+	c->data = calloc(1, 4);
+	if (c->path == NULL || c->data == NULL) {
+		if (c->path != NULL) {
+			CGPathRelease((CGPathRef)c->path);
+		}
+		free(c->data);
+		free(c);
+		return NULL;
+	}
+	c->image = pixman_image_create_bits(PIXMAN_a8r8g8b8, 1, 1, (uint32_t *)c->data, 4);
+	if (c->image == NULL) {
+		CGPathRelease((CGPathRef)c->path);
+		free(c->data);
+		free(c);
+		return NULL;
+	}
+	return c;
+}
+
+struct cg_pdf_writer *cg_context_pdf_writer(CGContextRef c)
+{
+	return c != NULL ? c->writer : NULL;
 }
 
 void CGContextFlush(CGContextRef c)
@@ -832,6 +924,10 @@ static void cg_group_begin(CGContextRef c, CFDictionaryRef auxiliaryInfo)
 
 void CGContextBeginTransparencyLayer(CGContextRef c, CFDictionaryRef auxiliaryInfo)
 {
+	if (c != NULL && c->writer != NULL) {
+		cg_pdf_writer_refuse(c->writer, "transparency layers");
+		return;
+	}
 	cg_group_begin(c, auxiliaryInfo);
 }
 
@@ -844,6 +940,10 @@ void CGContextBeginTransparencyLayerWithRect(CGContextRef c, CGRect rect, CFDict
 	if (c == NULL) {
 		return;
 	}
+	if (c->writer != NULL) {
+		cg_pdf_writer_refuse(c->writer, "transparency layers");
+		return;
+	}
 	cg_group_begin(c, auxiliaryInfo);
 	if (c->groups != NULL) {
 		CGContextClipToRect(c, rect);
@@ -853,6 +953,12 @@ void CGContextBeginTransparencyLayerWithRect(CGContextRef c, CGRect rect, CFDict
 void CGContextEndTransparencyLayer(CGContextRef c)
 {
 	if (c == NULL) {
+		return;
+	}
+	if (c->writer != NULL) {
+		/* THE BEGIN WAS REFUSED TOO, so there is no group to pop and nothing the caller can do but
+		 * continue; saying so once is the honest answer. */
+		cg_pdf_writer_refuse(c->writer, "transparency layers");
 		return;
 	}
 	if (c->groups == NULL) {
@@ -879,6 +985,9 @@ void CGContextSaveGState(CGContextRef c)
 		}
 		c->stack = grown;
 		c->stack_cap = want;
+	}
+	if (c->writer != NULL) {
+		cg_pdf_writer_save(c->writer);
 	}
 	slot = &c->stack[c->depth];
 	*slot = c->state;
@@ -910,6 +1019,9 @@ void CGContextRestoreGState(CGContextRef c)
 		return;
 	}
 	c->depth--;
+	if (c->writer != NULL) {
+		cg_pdf_writer_restore(c->writer);
+	}
 	pixman_region32_fini(&c->state.clip);
 	/* THE STATE BEING REPLACED LETS GO OF ITS PATTERNS FIRST, and the saved state's claim is what
 	 * survives — which is the pair to the retain `CGContextSaveGState` took. The order matters only
@@ -960,6 +1072,9 @@ CGAffineTransform CGContextGetUserSpaceToDeviceSpaceTransform(CGContextRef c)
 void CGContextConcatCTM(CGContextRef c, CGAffineTransform t)
 {
 	if (c != NULL) {
+		if (c->writer != NULL) {
+			cg_pdf_writer_ctm(c->writer, t);
+		}
 		c->state.ctm = CGAffineTransformConcat(t, c->state.ctm);
 	}
 }
@@ -967,6 +1082,9 @@ void CGContextConcatCTM(CGContextRef c, CGAffineTransform t)
 void CGContextTranslateCTM(CGContextRef c, CGFloat tx, CGFloat ty)
 {
 	if (c != NULL) {
+		if (c->writer != NULL) {
+			cg_pdf_writer_ctm(c->writer, CGAffineTransformMakeTranslation(tx, ty));
+		}
 		c->state.ctm = CGAffineTransformTranslate(c->state.ctm, tx, ty);
 	}
 }
@@ -974,6 +1092,9 @@ void CGContextTranslateCTM(CGContextRef c, CGFloat tx, CGFloat ty)
 void CGContextScaleCTM(CGContextRef c, CGFloat sx, CGFloat sy)
 {
 	if (c != NULL) {
+		if (c->writer != NULL) {
+			cg_pdf_writer_ctm(c->writer, CGAffineTransformMakeScale(sx, sy));
+		}
 		c->state.ctm = CGAffineTransformScale(c->state.ctm, sx, sy);
 	}
 }
@@ -981,6 +1102,9 @@ void CGContextScaleCTM(CGContextRef c, CGFloat sx, CGFloat sy)
 void CGContextRotateCTM(CGContextRef c, CGFloat angle)
 {
 	if (c != NULL) {
+		if (c->writer != NULL) {
+			cg_pdf_writer_ctm(c->writer, CGAffineTransformMakeRotation(angle));
+		}
 		c->state.ctm = CGAffineTransformRotate(c->state.ctm, angle);
 	}
 }
@@ -1087,6 +1211,10 @@ static void cg_clip_mask_install(CGContextRef c, pixman_image_t *mask, int mx, i
 
 void CGContextClipToMask(CGContextRef c, CGRect rect, CGImageRef mask)
 {
+	if (c != NULL && c->writer != NULL) {
+		cg_pdf_writer_refuse(c->writer, "a clip mask (CGContextClipToMask)");
+		return;
+	}
 	pixman_image_t *cover;
 	unsigned char *bytes;
 	CGAffineTransform inverse;
@@ -1180,6 +1308,12 @@ void CGContextClipToRects(CGContextRef c, const CGRect *rects, size_t count)
 		CGContextBeginPath(c);
 		return;
 	}
+	if (c->writer != NULL) {
+		for (i = 0; i < count; i++) {
+			cg_pdf_writer_clip_rect(c->writer, rects[i]);
+		}
+		return;
+	}
 	scratch = CGPathCreateMutable();
 	if (scratch == NULL) {
 		return;
@@ -1210,6 +1344,10 @@ void CGContextClipToRect(CGContextRef c, CGRect rect)
 		fprintf(stderr, "CG-REFUSE: CGContextClipToRect under a rotated or skewed CTM "
 				"(a device-space clip region is axis-aligned; the bounding box "
 				"would clip away pixels inside the rect)\n");
+		return;
+	}
+	if (c->writer != NULL) {
+		cg_pdf_writer_clip_rect(c->writer, rect);
 		return;
 	}
 	dev = CGRectApplyAffineTransform(rect, c->state.ctm);
@@ -1321,6 +1459,10 @@ static int cg_color_to_rgba(CGColorRef color, CGFloat rgba[4]);
 void CGContextSetShadowWithColor(CGContextRef c, CGSize offset, CGFloat blur, CGColorRef color)
 {
 	if (c == NULL) {
+		return;
+	}
+	if (c->writer != NULL) {
+		cg_pdf_writer_refuse(c->writer, "shadows");
 		return;
 	}
 	if (blur < 0.0) {
@@ -2546,11 +2688,21 @@ static void cg_clip_to_current_path(CGContextRef c, int even_odd)
 
 void CGContextClip(CGContextRef c)
 {
+	if (c != NULL && c->writer != NULL) {
+		cg_pdf_writer_clip_path(c->writer, (CGPathRef)c->path, false);
+		CGContextBeginPath(c);
+		return;
+	}
 	cg_clip_to_current_path(c, 0);
 }
 
 void CGContextEOClip(CGContextRef c)
 {
+	if (c != NULL && c->writer != NULL) {
+		cg_pdf_writer_clip_path(c->writer, (CGPathRef)c->path, true);
+		CGContextBeginPath(c);
+		return;
+	}
 	cg_clip_to_current_path(c, 1);
 }
 
@@ -3277,6 +3429,15 @@ static void cg_fill_current_path(CGContextRef c, int even_odd)
 	if (c == NULL) {
 		return;
 	}
+	if (c->writer != NULL) {
+		cg_pdf_paint_state ps;
+
+		fn_pdf_paint_state(c, &ps);
+		cg_pdf_writer_paint_path(c->writer, (CGPathRef)c->path,
+					 even_odd ? CG_PDF_PAINT_EOFILL : CG_PDF_PAINT_FILL, &ps);
+		CGContextBeginPath(c);
+		return;
+	}
 	/* THE CONTEXT'S ALPHA MULTIPLIES THE PAINT'S, at draw time, which is Apple's contract for
 	 * `CGContextSetAlpha` and the reason it is a separate field rather than a modification of the fill
 	 * colour. WHICH PAINT IT IS — a colour or a pattern — is decided in one place, `cg_paint_path`. */
@@ -3331,6 +3492,10 @@ void CGContextClearRect(CGContextRef c, CGRect rect)
 	CGMutablePathRef scratch;
 
 	if (c == NULL) {
+		return;
+	}
+	if (c->writer != NULL) {
+		cg_pdf_writer_clear_rect(c->writer, rect);
 		return;
 	}
 	scratch = CGPathCreateMutable();
@@ -3398,6 +3563,14 @@ static void cg_stroke_path_with_width(CGContextRef c, CGPathRef path, CGFloat wi
 	CGFloat a;
 
 	if (c == NULL || path == NULL) {
+		return;
+	}
+	if (c->writer != NULL) {
+		cg_pdf_paint_state ps;
+
+		fn_pdf_paint_state(c, &ps);
+		ps.line_width = width;
+		cg_pdf_writer_paint_path(c->writer, path, CG_PDF_PAINT_STROKE, &ps);
 		return;
 	}
 	if (c->state.dash_count > 0) {
@@ -3476,6 +3649,19 @@ void CGContextStrokeRect(CGContextRef c, CGRect rect)
 static void fn_paint_scratch_path(CGContextRef c, CGPathRef scratch, int stroking)
 {
 	if (scratch == NULL) {
+		return;
+	}
+	if (c->writer != NULL) {
+		cg_pdf_paint_state ps;
+
+		fn_pdf_paint_state(c, &ps);
+		if (stroking) {
+			ps.line_width = c->state.line_width;
+			cg_pdf_writer_paint_path(c->writer, scratch, CG_PDF_PAINT_STROKE, &ps);
+		} else {
+			cg_pdf_writer_paint_path(c->writer, scratch, CG_PDF_PAINT_FILL, &ps);
+		}
+		CGPathRelease(scratch);
 		return;
 	}
 	/* THE HELPERS TAKE A PATH AND DO NOT CONSUME IT, so the caller's current path is untouched BY
@@ -3637,6 +3823,10 @@ void CGContextStrokeLineSegments(CGContextRef c, const CGPoint *points, size_t c
  * leave part of the clip untiled. */
 void CGContextDrawTiledImage(CGContextRef c, CGRect rect, CGImageRef image)
 {
+	if (c != NULL && c->writer != NULL) {
+		cg_pdf_writer_refuse(c->writer, "tiled images (CGContextDrawTiledImage)");
+		return;
+	}
 	CGAffineTransform inverse;
 	pixman_box32_t *ext;
 	CGRect extents;
@@ -3695,6 +3885,10 @@ void CGContextDrawTiledImage(CGContextRef c, CGRect rect, CGImageRef image)
 
 void CGContextBeginPage(CGContextRef c, const CGRect *mediaBox)
 {
+	if (c != NULL && c->writer != NULL) {
+		(void)cg_pdf_writer_begin_page(c->writer, mediaBox);
+		return;
+	}
 	(void)c;
 	(void)mediaBox;
 	fprintf(stderr, "CG-REFUSE: a PAGE is a unit of a page-based context — a PDF or printing context — and "
@@ -3704,6 +3898,10 @@ void CGContextBeginPage(CGContextRef c, const CGRect *mediaBox)
 
 void CGContextEndPage(CGContextRef c)
 {
+	if (c != NULL && c->writer != NULL) {
+		cg_pdf_writer_end_page(c->writer);
+		return;
+	}
 	(void)c;
 	fprintf(stderr, "CG-REFUSE: CGContextEndPage needs a page-based context, and this library has none\n");
 }
@@ -3711,6 +3909,23 @@ void CGContextEndPage(CGContextRef c)
 void CGContextDrawPath(CGContextRef c, CGPathDrawingMode mode)
 {
 	if (c == NULL) {
+		return;
+	}
+	if (c->writer != NULL) {
+		cg_pdf_paint_state ps;
+		int operation;
+
+		switch (mode) {
+		case kCGPathFill: operation = CG_PDF_PAINT_FILL; break;
+		case kCGPathEOFill: operation = CG_PDF_PAINT_EOFILL; break;
+		case kCGPathStroke: operation = CG_PDF_PAINT_STROKE; break;
+		case kCGPathFillStroke: operation = CG_PDF_PAINT_FILLSTROKE; break;
+		case kCGPathEOFillStroke: operation = CG_PDF_PAINT_EOFILLSTROKE; break;
+		default: return;
+		}
+		fn_pdf_paint_state(c, &ps);
+		cg_pdf_writer_paint_path(c->writer, (CGPathRef)c->path, operation, &ps);
+		CGContextBeginPath(c);
 		return;
 	}
 	switch (mode) {
@@ -4161,6 +4376,10 @@ void CGContextSetFillPattern(CGContextRef c, CGPatternRef pattern, const CGFloat
 	if (c == NULL) {
 		return;
 	}
+	if (c->writer != NULL) {
+		cg_pdf_writer_refuse(c->writer, "pattern fills");
+		return;
+	}
 	if (pattern == NULL || components == NULL) {
 		fprintf(stderr, "CG-REFUSE: CGContextSetFillPattern needs a pattern and its components; "
 				"a NULL pair is refused rather than read as 'back to the fill "
@@ -4175,6 +4394,10 @@ void CGContextSetFillPattern(CGContextRef c, CGPatternRef pattern, const CGFloat
 void CGContextSetStrokePattern(CGContextRef c, CGPatternRef pattern, const CGFloat *components)
 {
 	if (c == NULL) {
+		return;
+	}
+	if (c->writer != NULL) {
+		cg_pdf_writer_refuse(c->writer, "pattern strokes");
 		return;
 	}
 	if (pattern == NULL || components == NULL) {
@@ -4470,6 +4693,13 @@ void CGContextDrawImage(CGContextRef c, CGRect rect, CGImageRef image)
 	const CGFloat *mask_decode;
 
 	if (c == NULL || image == NULL || c->data == NULL) {
+		return;
+	}
+	if (c->writer != NULL) {
+		cg_pdf_paint_state ps;
+
+		fn_pdf_paint_state(c, &ps);
+		cg_pdf_writer_image(c->writer, rect, image, &ps);
 		return;
 	}
 	if (!cg_image_is_drawable(image)) {
@@ -4784,6 +5014,11 @@ void CGContextDrawLinearGradient(CGContextRef c, CGGradientRef gradient, CGPoint
 {
 	cg_gradient_draw gd;
 
+	if (c != NULL && c->writer != NULL) {
+		cg_pdf_writer_refuse(c->writer, "gradients (CGContextDrawLinearGradient)");
+		return;
+	}
+
 	if (c == NULL) {
 		return;
 	}
@@ -4806,6 +5041,11 @@ void CGContextDrawRadialGradient(CGContextRef c, CGGradientRef gradient, CGPoint
 				 CGGradientDrawingOptions options)
 {
 	cg_gradient_draw gd;
+
+	if (c != NULL && c->writer != NULL) {
+		cg_pdf_writer_refuse(c->writer, "gradients (CGContextDrawRadialGradient)");
+		return;
+	}
 
 	if (c == NULL) {
 		return;
@@ -4843,6 +5083,10 @@ static void cg_shading_paint(void *info, CGFloat x, CGFloat y, CGFloat rgba[4])
 
 void CGContextDrawShading(CGContextRef c, CGShadingRef shading)
 {
+	if (c != NULL && c->writer != NULL) {
+		cg_pdf_writer_refuse(c->writer, "shadings (CGContextDrawShading)");
+		return;
+	}
 	pixman_image_t *src;
 	int px;
 	int py;
@@ -5416,6 +5660,44 @@ static void cg_show_glyph_mode(CGContextRef c, CGGlyph glyph, CGPoint pen, pixma
 	CGMutablePathRef path;
 	int mode = (int)c->state.text_mode;
 
+	if (c->writer != NULL) {
+		cg_pdf_paint_state ps;
+
+		if (mode == kCGTextInvisible) {
+			return;
+		}
+		if (mode == kCGTextStrokeClip || mode == kCGTextFillStrokeClip) {
+			fprintf(stderr, "CG-REFUSE: text drawing mode %d is not recorded by the PDF context\n", mode);
+			return;
+		}
+		path = cg_text_path(c, glyph, pen);
+		if (path == NULL) {
+			return;
+		}
+		fn_pdf_paint_state(c, &ps);
+		switch (mode) {
+		case kCGTextFill:
+			cg_pdf_writer_paint_path(c->writer, (CGPathRef)path, CG_PDF_PAINT_FILL, &ps);
+			break;
+		case kCGTextStroke:
+			cg_pdf_writer_paint_path(c->writer, (CGPathRef)path, CG_PDF_PAINT_STROKE, &ps);
+			break;
+		case kCGTextFillStroke:
+			cg_pdf_writer_paint_path(c->writer, (CGPathRef)path, CG_PDF_PAINT_FILLSTROKE, &ps);
+			break;
+		case kCGTextClip:
+			cg_pdf_writer_clip_path(c->writer, (CGPathRef)path, false);
+			break;
+		case kCGTextFillClip:
+			cg_pdf_writer_paint_path(c->writer, (CGPathRef)path, CG_PDF_PAINT_FILL, &ps);
+			cg_pdf_writer_clip_path(c->writer, (CGPathRef)path, false);
+			break;
+		default:
+			break;
+		}
+		CGPathRelease((CGPathRef)path);
+		return;
+	}
 	if (mode == kCGTextFill) {
 		cg_show_one_glyph_fill(c, glyph, pen, op);
 		return;

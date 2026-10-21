@@ -995,6 +995,7 @@ static void fn_draw_image(fn_render *r, cg_pdf_obj *stream)
 			size_t y;
 			size_t c;
 			bool indexed = false;
+			bool has_smask = false;
 			double hival = 0;
 			double dmin[4] = { 0, 0, 0, 0 };
 			double dmax[4] = { 1, 1, 1, 1 };
@@ -1067,6 +1068,61 @@ static void fn_draw_image(fn_render *r, cg_pdf_obj *stream)
 				}
 			}
 			CFRelease(data);
+			/* **THE SOFT MASK, WHICH IS THE OTHER STREAM THIS IMAGE NAMES.** `/SMask` points at a
+			 * DeviceGray image of the same nominal size; its samples ARE the alpha, 0 transparent and 1
+			 * opaque (with /Decode applied). Without this, an image whose transparency the writer emitted
+			 * as an /SMask came back opaque — MEASURED by the round trip in tests/pdf_write.c. */
+			{
+				cg_pdf_obj *smask = cg_pdf_resolve(doc, cg_pdf_dict_get(doc, dict, "SMask"));
+
+				if (smask != NULL && smask->type == kCGPDFObjectTypeStream) {
+					cg_pdf_obj *mdict = smask->u.stream.dict;
+					long long mw = 0;
+					long long mh = 0;
+					long long mbpc = 8;
+					CFDataRef mdata;
+
+					cg_pdf_integer(doc, cg_pdf_dict_get(doc, mdict, "Width"), &mw);
+					cg_pdf_integer(doc, cg_pdf_dict_get(doc, mdict, "Height"), &mh);
+					cg_pdf_integer(doc, cg_pdf_dict_get(doc, mdict, "BitsPerComponent"), &mbpc);
+					if (mw > 0 && mh > 0 && (mbpc == 1 || mbpc == 2 || mbpc == 4 || mbpc == 8) &&
+					    (mdata = cg_pdf_stream_data(doc, smask)) != NULL) {
+						size_t mstride = ((size_t)mw * (size_t)mbpc + 7) / 8;
+
+						if (mstride * (size_t)mh <= (size_t)CFDataGetLength(mdata)) {
+							const unsigned char *msrc = CFDataGetBytePtr(mdata);
+							unsigned mmax = (1u << mbpc) - 1;
+							double md0 = 0;
+							double md1 = 1;
+							cg_pdf_obj *mdecode = cg_pdf_dict_get(doc, mdict, "Decode");
+
+							if (mdecode != NULL && mdecode->type == kCGPDFObjectTypeArray &&
+							    mdecode->u.array.count >= 2) {
+								cg_pdf_number(doc, mdecode->u.array.items[0], &md0);
+								cg_pdf_number(doc, mdecode->u.array.items[1], &md1);
+							}
+							for (y = 0; y < (size_t)height; y++) {
+								size_t my = y * (size_t)mh / (size_t)height;
+
+								for (x = 0; x < (size_t)width; x++) {
+									size_t mx = x * (size_t)mw / (size_t)width;
+									unsigned sample = fn_bits(msrc + my * mstride,
+												  mx * (size_t)mbpc, (int)mbpc);
+									double value = mmax ? (double)sample / (double)mmax : 0.0;
+									double a = md0 + value * (md1 - md0);
+
+									if (a < 0) a = 0;
+									if (a > 1) a = 1;
+									rgb[(y * (size_t)width + x) * 4 + 3] =
+										(unsigned char)(a * 255.0 + 0.5);
+								}
+							}
+							has_smask = true;
+						}
+						CFRelease(mdata);
+					}
+				}
+			}
 			{
 				/* THE PROVIDER MUST OUTLIVE THE IMAGE, and `CreateWithData` does not copy: the converted
 				 * pixels go into a CFData that the provider retains, and the working buffer is free to go. */
@@ -1087,7 +1143,9 @@ static void fn_draw_image(fn_render *r, cg_pdf_obj *stream)
 				CGColorSpaceRef device_rgb = CGColorSpaceCreateDeviceRGB();
 
 				image = CGImageCreate((size_t)width, (size_t)height, 8, 32, (size_t)width * 4,
-						      device_rgb, kCGImageAlphaNoneSkipLast | kCGBitmapByteOrder32Big,
+						      device_rgb,
+						      (has_smask ? kCGImageAlphaLast : kCGImageAlphaNoneSkipLast) |
+							      kCGBitmapByteOrder32Big,
 						      provider, NULL, true, kCGRenderingIntentDefault);
 				CGColorSpaceRelease(device_rgb);
 			}

@@ -78,6 +78,19 @@ than only fixtures: `/usr/share/doc/quilt/quilt.pdf` (pdfTeX, twelve pages of Ty
 `/usr/share/cups/data/default-testpage.pdf` (paths, quadratic logo outlines, CMYK colour wheels) render as poppler
 renders them.
 
+**AND A PDF IS WRITTEN: `CGPDFContext` RECORDS DRAWING INTO CONTENT STREAMS AND WRITES THE FILE.** This is the
+half `dataWithPDFInsideRect:` and print-to-PDF need, and it is a RECORDING context rather than a raster one: the
+context has no real surface, every painting door writes the matching operators (paths replayed from
+`CGPathApply`, quads raised to cubics), images become Flate-compressed image XObjects with a /SMask when they
+carry alpha, alpha and blend become /ExtGState, and clips and `q`/`Q` are the PDF state they spell. Pages are
+begun and ended explicitly and carry their own /MediaBox; `Close` writes the header, objects, classic xref and
+trailer through the caller's CGDataConsumer. **TEXT IS GLYPH OUTLINES**: exact vector geometry, but not
+selectable — embedding a font program is the next landing rather than a claim made here. MEASURED
+(tests/pdf_write.c): a two-page document drawn, closed, reopened by this library's own reader, and rendered by
+its own renderer — rectangle, text ink, an opaque image's samples, an alpha image's transparent half, a /ca 0.5
+fill and a clip that must not survive its `Q`, all read back as pixels; and the same file opens in poppler with
+its title, creator, XMP metadata and page sizes intact.
+
 **Built, shared, and C throughout, over Core Foundation — and the NS types are converted back to CF.**
 This section used to say the opposite on every count ("imported; not yet built, and its NS types have not
 been converted back to CF", with lcms2 "not installed on this machine").
@@ -137,10 +150,10 @@ been converted back to CF", with lcms2 "not installed on this machine").
 
 ### What is not done
 
-- **PDF DRAWS BUT DOES NOT WRITE.** `CGPDFContext` is the writer, and it needs `CGContext` to gain a RECORDING
-  path (its fills go straight to pixman today), which is an architecture change rather than a new class. So
-  `dataWithPDFInsideRect:` still refuses and print-to-PDF does not exist; `NSPDFImageRep` now has a renderer to
-  drive, and the AppKit door that uses it is the next step on that side.
+- **PDF WRITES TEXT AS OUTLINES, NOT AS AN EMBEDDED FONT.** The geometry is right and the page is vector, but a
+  consumer cannot select or search the text this build writes. The PDF context also REFUSES BY NAME gradients,
+  shadings, patterns, shadows, transparency layers and clip-to-mask, so a caller knows when a page lacks them.
+  On the AppKit side `dataWithPDFInsideRect:` and `NSPDFImageRep` are now unblocked and are the next step.
 - **PDF encryption is reported, not decrypted.** `CGPDFDocumentIsEncrypted` answers true and the pages, catalog and
   info refuse by name; `IsUnlocked` is therefore false for an encrypted file and there is no password door.
 - **The scanner skips inline images rather than parsing them**, so the renderer does not draw them either, and

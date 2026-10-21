@@ -426,11 +426,12 @@ void CGContextDrawImage(CGContextRef context, CGRect rect, CGImageRef image);
  * the clip — so this door draws the tiles and adds no geometry of its own: a tile is a call to the door that
  * already knows how to put an image into a rectangle, and the grid is the stepping Apple describes.
  *
- * `CGContextBeginPage` AND `CGContextEndPage` ARE REFUSED BY NAME, WHICH IS WHAT THE HEADER LEAVES ROOM FOR
- * AND NOTHING MORE: "Begin a new page." and "End the current page." are the whole of what it says, and a PAGE
- * is a unit of a PAGE-BASED context — a PDF or printing context, both of which are the parked half. This
- * library's contexts are bitmaps, where a page boundary would have to be invented, and inventing one is the
- * thing this tree refuses. */
+ * `CGContextBeginPage` AND `CGContextEndPage` ARE THE PAGE-BASED CONTEXT'S, AND `CGPDFContext` IS THAT CONTEXT
+ * NOW: on one of its contexts these begin and end a page, with `mediaBox` as the page's /MediaBox (NULL means
+ * the context's own default). ON A BITMAP CONTEXT THEY ARE STILL REFUSED BY NAME, because "Begin a new page."
+ * is the whole of what the 10.6 header says and a surface with no pages would have to invent one.
+ * `CGPDFContextBeginPage` is the fuller spelling: it also reads the page-info dictionary's crop, bleed, trim
+ * and art boxes. */
 void CGContextDrawTiledImage(CGContextRef c, CGRect rect, CGImageRef image);
 void CGContextBeginPage(CGContextRef c, const CGRect *mediaBox);
 void CGContextEndPage(CGContextRef c);
