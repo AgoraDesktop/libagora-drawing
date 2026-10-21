@@ -104,6 +104,7 @@ int main(void)
 	printf("  (font directory: %s)\n", dir);
 
 	/* ---- the set itself, by its real names ------------------------------------------------ */
+	expect_family("Figtree", "Figtree-");
 	expect_family("Inter", "Inter-");
 	expect_family("Inter Display", "InterDisplay-");
 	expect_family("Source Serif 4", "SourceSerif4-");
@@ -131,8 +132,9 @@ int main(void)
 	expect_family("Noto Emoji", "NotoEmoji-");
 
 	/* ---- the macOS names, through the compatibility table -------------------------------- */
-	expect_family("SF Pro Text", "Inter-");
-	expect_family("SF Pro Display", "InterDisplay-");
+	expect_family("SF Pro Text", "Figtree-");
+	expect_family("SF Pro Display", "Figtree-");
+	expect_family("system-ui", "Figtree-");
 	expect_family("Helvetica", "LiberationSans");
 	expect_family("Arial", "LiberationSans");
 	expect_family("Times New Roman", "LiberationSerif");

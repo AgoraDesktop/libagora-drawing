@@ -18,7 +18,8 @@ name is not installed.
 
 | macOS role / name | Bundled family | Licence | Files |
 |---|---|---|---|
-| SF Pro Text, SF Pro Display, `.SF NS`, system UI | **Inter**, **Inter Display** | OFL 1.1 | `Inter/`, `InterDisplay/` |
+| SF Pro Text, SF Pro Display, `.SF NS`, system UI | **Figtree** (the default UI face) | OFL 1.1 | `Figtree/` |
+| the UI fallback, and callers that name it directly | **Inter**, **Inter Display** | OFL 1.1 | `Inter/`, `InterDisplay/` |
 | New York, SF Serif | **Source Serif 4** | OFL 1.1 | `SourceSerif4/` |
 | SF Mono, Menlo, Monaco | **IBM Plex Mono** | OFL 1.1 (RFN "Plex", unmodified) | `IBMPlexMono/` |
 | Helvetica, Helvetica Neue, Arial, Verdana, Tahoma | **Liberation Sans** | OFL 1.1 (RFN "Liberation", unmodified) | `LiberationSans/` |
@@ -51,6 +52,7 @@ tree; it is regenerated whenever a face changes.
 
 | Family | Upstream and version | How it was taken |
 |---|---|---|
+| Figtree | `google/fonts` commit **47d54ca1ebb14fd864695f1d39dc734f39017c33**, `ofl/figtree/` | **static instances** of `Figtree[wght].ttf` and `Figtree-Italic[wght].ttf` at weights 400/500/600/700 and 400/700; the family has no Reserved Font Name |
 | Inter, Inter Display | `rsms/inter` release **v4.1**, archive `Inter-4.1.zip`, SHA-256 `9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e` | the `extras/ttf/` static builds, unmodified; `LICENSE.txt` from the archive |
 | Source Serif 4 | `adobe-fonts/source-serif` release **4.005R**, archive `source-serif-4.005_Desktop.zip`, SHA-256 `549fdb8f9a682bd06944298621404969f6de77c2e422ff3b8244a1dcd6a0c425` | `TTF/SourceSerif4-{Regular,It,Semibold,Bold,BoldIt}.ttf`, unmodified; `LICENSE.md` from the archive |
 | IBM Plex Mono | `google/fonts` commit **47d54ca1ebb14fd864695f1d39dc734f39017c33**, `ofl/ibmplexmono/` | static TTFs at that commit, unmodified |
@@ -66,8 +68,8 @@ tree; it is regenerated whenever a face changes.
 | Special Elite | `google/fonts` commit **47d54ca1eb…**, `apache/specialelite/` | the static TTF and the Apache 2.0 licence; `NOTICE.txt` records the copyright line from the face |
 | Noto Emoji | `google/fonts` commit **47d54ca1eb…**, `ofl/notoemoji/` | **static instance** of `NotoEmoji[wght].ttf` at weight 400; the family has no Reserved Font Name |
 
-**The three instanced families are the only modified faces.** A static instance of a variable font is a Modified
-Version under the SIL Open Font License; each of those three upstream copyright lines declares **no Reserved Font
+**The four instanced families are the only modified faces.** A static instance of a variable font is a Modified
+Version under the SIL Open Font License; each of those four upstream copyright lines declares **no Reserved Font
 Name**, so the modified file may keep the family name, and the licence and this note travel with it. The instance
 was made with fontTools `varLib.instancer --update-name-table`; the exact axis values are in the table above. The
 version-1 `Jost.zip` release was inspected and **not used**, because its family name is spelled `Jost*` and its
@@ -92,7 +94,8 @@ static files are older than the variable font; the variable font is the upstream
 ## Updating the set
 
 1. Take the new upstream release/commit; do not edit a face in place.
-2. Replace the family's `.ttf` files and its licence file together; if the family is instanced, run
+2. Replace the family's `.ttf` files and its licence file together; if the family is instanced (Figtree, Jost,
+   Nunito and Noto Emoji today), run
    `fonttools varLib.instancer --update-name-table -o <out>.ttf <variable>.ttf wght=<value>` and record the new
    upstream commit and values here.
 3. `cd fonts && find . -name '*.ttf' -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS`

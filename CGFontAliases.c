@@ -23,7 +23,8 @@
  * which it returns; `cg_font_create_with_name` searches for it exactly as it would search for a caller's name.
  *
  * **THE CHOICES, SLOT BY SLOT, ARE RECORDED IN `fonts/PROVENANCE.md`, beside the faces themselves.** The
- * short version: Inter is the SF Pro role, Source Serif 4 is New York, IBM Plex Mono is SF Mono and Menlo,
+ * short version: Figtree is the SF Pro/system-UI role (Inter is the bundled fallback), Source Serif 4 is New York,
+ * IBM Plex Mono is SF Mono and Menlo,
  * Liberation Sans/Serif/Mono are the Helvetica/Arial, Times and Courier roles, Gelasio is Georgia, Jost is
  * Futura, Mulish is Avenir, and the display/script faces are the small OFL families that stand in for the
  * Mac's display and handwriting catalogue.
@@ -39,20 +40,20 @@ struct fn_font_alias {
 };
 
 static const struct fn_font_alias fn_font_aliases[] = {
-	/* ---- the system faces ---------------------------------------------------------------- */
-	{ "SF Pro",			"Inter" },
-	{ "SF Pro Text",		"Inter" },
-	{ "SF Pro Display",		"Inter Display" },
-	{ "SF UI Text",			"Inter" },
-	{ "SF UI Display",		"Inter Display" },
-	{ ".SF NS",			"Inter" },
-	{ ".AppleSystemUIFont",		"Inter" },
-	{ "System Font",		"Inter" },
-	{ "Lucida Grande",		"Inter" },
-	{ "LucidaGrande",		"Inter" },
-	{ "Geneva",			"Inter" },
-	{ "Skia",			"Inter" },
-	{ "Seravek",			"Inter" },
+	/* ---- the system faces, which are the default UI family --------------------------------- */
+	{ "SF Pro",			"Figtree" },
+	{ "SF Pro Text",		"Figtree" },
+	{ "SF Pro Display",		"Figtree" },
+	{ "SF UI Text",			"Figtree" },
+	{ "SF UI Display",		"Figtree" },
+	{ ".SF NS",			"Figtree" },
+	{ ".AppleSystemUIFont",		"Figtree" },
+	{ "System Font",		"Figtree" },
+	{ "Lucida Grande",		"Figtree" },
+	{ "LucidaGrande",		"Figtree" },
+	{ "Geneva",			"Figtree" },
+	{ "Skia",			"Figtree" },
+	{ "Seravek",			"Figtree" },
 
 	/* ---- Helvetica and Arial, which are one role here ------------------------------------- */
 	{ "Helvetica",			"Liberation Sans" },
@@ -164,8 +165,8 @@ static const struct fn_font_alias fn_font_aliases[] = {
 	{ "Emoji",			"Noto Emoji" },
 
 	/* ---- the CSS generic families, which a web view or a design tool names ---------------- */
-	{ "sans-serif",			"Inter" },
-	{ "system-ui",			"Inter" },
+	{ "sans-serif",			"Figtree" },
+	{ "system-ui",			"Figtree" },
 	{ "serif",			"Source Serif 4" },
 	{ "monospace",			"IBM Plex Mono" },
 };

@@ -29,10 +29,10 @@ being changed.
 ## The default font set
 
 **Agora ships its own fonts, because inheriting the host's is how one desktop stops looking like one desktop.**
-`fonts/` holds an open-licensed set modelled on the roles macOS fills with its own catalogue — Inter for the
-system UI, Source Serif 4 for New York, IBM Plex Mono for SF Mono/Menlo, Liberation for the Helvetica/Arial,
-Times and Courier roles, and the display, handwriting and symbol faces recorded in `fonts/PROVENANCE.md`. No
-Apple font is included or redistributable.
+`fonts/` holds an open-licensed set modelled on the roles macOS fills with its own catalogue — Figtree for the
+system UI (Inter remains the fallback and the explicit `Inter` name), Source Serif 4 for New York, IBM Plex Mono
+for SF Mono/Menlo, Liberation for the Helvetica/Arial, Times and Courier roles, and the display, handwriting and
+symbol faces recorded in `fonts/PROVENANCE.md`. No Apple font is included or redistributable.
 
 The set installs under `<prefix>/share/fonts/agora` and is **the first directory the name registry searches**
 (`AGORA_FONT_DIR` in `CMakeLists.txt`, compiled into `CGFont.c`). Host fonts are searched after it, and

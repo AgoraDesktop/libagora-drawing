@@ -31,7 +31,8 @@ Liberation Sans instead of nothing. `AGORA_UI_FONT`/`AGORA_MONO_FONT` name **rea
 
 | Role | Family |
 |---|---|
-| UI sans | Inter, Inter Display |
+| UI sans (default) | Figtree |
+| UI sans (fallback) | Inter, Inter Display |
 | UI serif | Source Serif 4 |
 | UI monospace | IBM Plex Mono |
 | Helvetica / Arial | Liberation Sans |
@@ -53,6 +54,6 @@ Liberation Sans instead of nothing. `AGORA_UI_FONT`/`AGORA_MONO_FONT` name **rea
 | Symbols / math | Noto Sans Symbols 2, Noto Sans Math |
 | Emoji | Noto Emoji |
 
-Each family keeps its upstream licence file beside its faces. The three static instances (Jost, Nunito, Noto
-Emoji) are recorded as Modified Versions in `PROVENANCE.md`; the families that reserve a name are shipped
+Each family keeps its upstream licence file beside its faces. The four static instances (Figtree, Jost, Nunito,
+Noto Emoji) are recorded as Modified Versions in `PROVENANCE.md`; the families that reserve a name are shipped
 unmodified.
