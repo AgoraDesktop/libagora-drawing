@@ -5670,11 +5670,19 @@ static void cg_show_glyph_mode(CGContextRef c, CGGlyph glyph, CGPoint pen, pixma
 			fprintf(stderr, "CG-REFUSE: text drawing mode %d is not recorded by the PDF context\n", mode);
 			return;
 		}
+		fn_pdf_paint_state(c, &ps);
+		/* **TEXT FIRST, OUTLINES ONLY WHEN THE FACE CANNOT BE EMBEDDED.** A TrueType-programmed face becomes a
+		 * Type0/CIDFontType2 font with Identity-H, so the page carries real text; a CFF or program-less face
+		 * falls through to the outline path below. */
+		if ((mode == kCGTextFill || mode == kCGTextStroke || mode == kCGTextFillStroke) && glyph != 0 &&
+		    cg_pdf_writer_text_glyph(c->writer, c->state.font, glyph, pen, c->state.font_size,
+					     c->state.text_matrix, mode, &ps)) {
+			return;
+		}
 		path = cg_text_path(c, glyph, pen);
 		if (path == NULL) {
 			return;
 		}
-		fn_pdf_paint_state(c, &ps);
 		switch (mode) {
 		case kCGTextFill:
 			cg_pdf_writer_paint_path(c->writer, (CGPathRef)path, CG_PDF_PAINT_FILL, &ps);

@@ -1045,6 +1045,54 @@ CGGlyph cg_font_glyph_for_unichar(CGFontRef font, unsigned unichar)
 	return (CGGlyph)index;
 }
 
+CGDataProviderRef cg_font_copy_provider(CGFontRef font)
+{
+	if (font == NULL || font->provider == NULL) {
+		return NULL;
+	}
+	return CGDataProviderRetain(font->provider);
+}
+
+bool cg_font_has_truetype_outlines(CGFontRef font)
+{
+	FT_ULong length = 0;
+
+	if (font == NULL || font->face == NULL || !FT_IS_SFNT(font->face)) {
+		return false;
+	}
+	return FT_Load_Sfnt_Table(font->face, FT_MAKE_TAG('g', 'l', 'y', 'f'), 0, NULL, &length) == 0 &&
+	       length > 0;
+}
+
+size_t cg_font_unicode_map(CGFontRef font, unsigned *map, size_t count)
+{
+	FT_CharMap saved;
+	FT_UInt glyph = 0;
+	FT_ULong code;
+	size_t filled = 0;
+
+	if (font == NULL || font->face == NULL || map == NULL || count == 0) {
+		return 0;
+	}
+	memset(map, 0, count * sizeof *map);
+	saved = font->face->charmap;
+	if (FT_Select_Charmap(font->face, FT_ENCODING_UNICODE) != 0) {
+		return 0;
+	}
+	code = FT_Get_First_Char(font->face, &glyph);
+	while (glyph != 0) {
+		if ((size_t)glyph < count && map[glyph] == 0) {
+			map[glyph] = (unsigned)code;
+			filled++;
+		}
+		code = FT_Get_Next_Char(font->face, code, &glyph);
+	}
+	if (saved != NULL) {
+		FT_Set_Charmap(font->face, saved);
+	}
+	return filled;
+}
+
 CGGlyph cg_font_glyph_for_code(CGFontRef font, unsigned code)
 {
 	static const FT_Encoding encodings[] = {

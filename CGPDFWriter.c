@@ -29,6 +29,7 @@
 #include <CoreGraphics/CGPDFWriter_internal.h>
 #include <CoreGraphics/CGColorSpace.h>
 #include <CoreGraphics/CGImage_internal.h>
+#include <CoreGraphics/CGFont_internal.h>
 
 #include <zlib.h>
 
@@ -137,6 +138,20 @@ struct cg_pdf_gstate {
 	char name[24];
 };
 
+/* ONE EMBEDDED FONT: the program, the two dictionaries that name it and the widths of the glyphs actually used. */
+struct cg_pdf_font_resource {
+	CGFontRef font;		/* retained */
+	unsigned object;	/* the Type0 font */
+	unsigned descendant;	/* the CIDFontType2, whose /W is left open until Close */
+	char name[24];
+	char base_name[96];
+	int upem;
+	unsigned char *used;	/* one byte per glyph, so a width is appended once */
+	size_t used_count;
+	size_t glyph_count;
+	unsigned *to_unicode;	/* glyph index -> Unicode, zero where the cmap has no name */
+};
+
 struct cg_pdf_writer {
 	CGDataConsumerRef consumer;
 	CGRect default_media;
@@ -163,7 +178,11 @@ struct cg_pdf_writer {
 	struct cg_pdf_gstate *gstates;
 	size_t gstate_count;
 	size_t gstate_cap;
+	struct cg_pdf_font_resource *fonts;
+	size_t font_count;
+	size_t font_cap;
 	unsigned next_image;
+	bool warned_no_embed;
 
 	bool closed;
 	bool failed;
@@ -420,6 +439,15 @@ void cg_pdf_writer_end_page(struct cg_pdf_writer *w)
 	fn_buf_printf(&resources, "/ProcSet [/PDF] ");
 	fn_build_resource_dict(&resources, "XObject", w->images, w->image_count);
 	fn_build_gstate_dict(&resources, w->gstates, w->gstate_count);
+	if (w->font_count > 0) {
+		size_t f;
+
+		fn_buf_printf(&resources, "/Font << ");
+		for (f = 0; f < w->font_count; f++) {
+			fn_buf_printf(&resources, "/%s %u 0 R ", w->fonts[f].name, w->fonts[f].object);
+		}
+		fn_buf_printf(&resources, ">> ");
+	}
 
 	page_num = fn_new_object(w);
 	if (page_num != 0) {
@@ -1003,6 +1031,204 @@ void cg_pdf_writer_image(struct cg_pdf_writer *w, CGRect rect, CGImageRef image,
 }
 
 /* ------------------------------------------------------------------------- */
+/* text, as text, when the face can be embedded                               */
+/* ------------------------------------------------------------------------- */
+
+static void fn_font_name(CGFontRef font, char *out, size_t size, unsigned fallback)
+{
+	CFStringRef name = CGFontCopyPostScriptName(font);
+
+	if (name == NULL || !CFStringGetCString(name, out, (CFIndex)size, kCFStringEncodingUTF8)) {
+		snprintf(out, size, "AgoraFont%u", fallback);
+	}
+	if (name != NULL) {
+		CFRelease(name);
+	}
+	/* A PDF NAME CANNOT HOLD SPACE OR A DELIMITER WITHOUT `#`-ESCAPING, and no real PostScript name has one. */
+	{
+		size_t i;
+
+		for (i = 0; out[i] != '\0'; i++) {
+			if (out[i] == ' ' || out[i] == '(' || out[i] == ')' || out[i] == '<' || out[i] == '>' ||
+			    out[i] == '[' || out[i] == ']' || out[i] == '/' || out[i] == '%' || out[i] == '#') {
+				out[i] = '-';
+			}
+		}
+	}
+}
+
+static int fn_metric_1000(int value, int upem)
+{
+	return (int)((double)value * 1000.0 / (double)upem + (value >= 0 ? 0.5 : -0.5));
+}
+
+/* THE FONT RESOURCE, CREATED ON FIRST USE. NULL means "draw the outline": the face has no program, or its
+ * outlines are CFF rather than `glyf`, so a CIDFontType2 pointing at it would be a lie. */
+static struct cg_pdf_font_resource *fn_font_resource(struct cg_pdf_writer *w, CGFontRef font)
+{
+	CGDataProviderRef provider;
+	CFDataRef program;
+	size_t i;
+	unsigned file_obj;
+	unsigned descriptor_obj;
+	unsigned descendant_obj;
+	unsigned object;
+	struct cg_pdf_font_resource *entry;
+	char name[96];
+	int upem;
+	int ascent;
+	int descent;
+	int cap_height;
+
+	if (font == NULL) {
+		return NULL;
+	}
+	for (i = 0; i < w->font_count; i++) {
+		if (w->fonts[i].font == font) {
+			return &w->fonts[i];
+		}
+	}
+	if (!cg_font_has_truetype_outlines(font)) {
+		if (!w->warned_no_embed) {
+			fprintf(stderr, "CG-REFUSE: a font whose outlines are not TrueType `glyf` is written as glyph "
+					"OUTLINES; its program is not a /FontFile2 and pretending it is would break the "
+					"reader\n");
+			w->warned_no_embed = true;
+		}
+		return NULL;
+	}
+	provider = cg_font_copy_provider(font);
+	if (provider == NULL) {
+		return NULL;
+	}
+	program = CGDataProviderCopyData(provider);
+	CGDataProviderRelease(provider);
+	if (program == NULL) {
+		return NULL;
+	}
+	upem = CGFontGetUnitsPerEm(font);
+	if (upem <= 0) {
+		CFRelease(program);
+		return NULL;
+	}
+	ascent = fn_metric_1000(CGFontGetAscent(font), upem);
+	/* PDF'S /Descent IS NEGATIVE (below the baseline); this library's CGFont door answers the magnitude. */
+	descent = -abs(fn_metric_1000(CGFontGetDescent(font), upem));
+	cap_height = fn_metric_1000(CGFontGetCapHeight(font), upem);
+
+	if (w->font_count == w->font_cap) {
+		size_t cap = w->font_cap ? w->font_cap * 2 : 8;
+		struct cg_pdf_font_resource *grown = realloc(w->fonts, cap * sizeof *grown);
+
+		if (grown == NULL) {
+			CFRelease(program);
+			return NULL;
+		}
+		w->fonts = grown;
+		w->font_cap = cap;
+	}
+	entry = &w->fonts[w->font_count];
+	memset(entry, 0, sizeof *entry);
+
+	file_obj = fn_new_object(w);
+	descendant_obj = fn_new_object(w);
+	descriptor_obj = fn_new_object(w);
+	object = fn_new_object(w);		/* the Type0 font */
+	if (file_obj == 0 || descendant_obj == 0 || descriptor_obj == 0 || object == 0) {
+		CFRelease(program);
+		return NULL;
+	}
+	entry->object = object;
+	entry->descendant = descendant_obj;
+	entry->font = (CGFontRef)CGFontRetain(font);
+	entry->upem = upem;
+	entry->glyph_count = CGFontGetNumberOfGlyphs(font);
+	entry->used = calloc(entry->glyph_count + 1, 1);
+	entry->to_unicode = calloc(entry->glyph_count + 1, sizeof *entry->to_unicode);
+	fn_font_name(font, name, sizeof name, object);
+	snprintf(entry->base_name, sizeof entry->base_name, "%s", name);
+	if (entry->to_unicode != NULL) {
+		cg_font_unicode_map(font, entry->to_unicode, entry->glyph_count + 1);
+	}
+	snprintf(entry->name, sizeof entry->name, "F%u", object);
+	w->font_count++;
+
+	{
+		/* `/Length1` IS THE UNCOMPRESSED PROGRAM LENGTH and must be a NUMBER; the stream helper adds /Length. */
+		char dict[64];
+
+		snprintf(dict, sizeof dict, "/Length1 %zu", (size_t)CFDataGetLength(program));
+		fn_object_stream(w, file_obj, dict, CFDataGetBytePtr(program),
+				 (size_t)CFDataGetLength(program));
+	}
+	CFRelease(program);
+	fn_object_printf(w, descriptor_obj,
+			 "<< /Type /FontDescriptor /FontName /%s /Flags 32 /FontBBox [-200 -300 1200 900] "
+			 "/ItalicAngle 0 /Ascent %d /Descent %d /CapHeight %d /StemV 80 /FontFile2 %u 0 R >>",
+			 name, ascent, descent, cap_height, file_obj);
+	fn_object_printf(w, descendant_obj,
+			 "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /%s /CIDSystemInfo << /Registry (Adobe) "
+			 "/Ordering (Identity) /Supplement 0 >> /FontDescriptor %u 0 R /CIDToGIDMap /Identity "
+			 "/DW 1000 /W [", name, descriptor_obj);
+	fn_object_printf(w, object,
+			 "<< /Type /Font /Subtype /Type0 /BaseFont /%s /Encoding /Identity-H /DescendantFonts "
+			 "[%u 0 R] >>", name, descendant_obj);
+	return entry;
+}
+
+bool cg_pdf_writer_text_glyph(struct cg_pdf_writer *w, CGFontRef font, CGGlyph glyph, CGPoint pen,
+			      CGFloat font_size, CGAffineTransform text_matrix, int mode,
+			      const cg_pdf_paint_state *paint)
+{
+	struct cg_pdf_font_resource *resource;
+	double em;
+	double a;
+	double b;
+	double c;
+	double d;
+	double e;
+	double f;
+
+	if (w == NULL || paint == NULL || !w->page_open || font == NULL || font_size <= 0.0 ||
+	    (mode != 0 && mode != 1 && mode != 2)) {
+		return false;
+	}
+	resource = fn_font_resource(w, font);
+	if (resource == NULL) {
+		return false;
+	}
+	if (resource->used != NULL && glyph < CGFontGetNumberOfGlyphs(font) && !resource->used[glyph]) {
+		int advance = 0;
+		int width = 1000;
+
+		resource->used[glyph] = 1;
+		if (CGFontGetGlyphAdvances(font, &glyph, 1, &advance)) {
+			width = fn_metric_1000(advance, resource->upem);
+		}
+		fn_object_printf(w, resource->descendant, "%u [%d] ", (unsigned)glyph, width);
+		resource->used_count++;
+	}
+
+	fn_emit_gstate(w, paint, mode != 1, mode != 0);
+	if (mode != 1) {
+		fn_emit_fill_colour(w, paint);
+	}
+	if (mode != 0) {
+		fn_emit_stroke_colour(w, paint);
+	}
+	em = (double)font_size / (double)resource->upem;
+	a = text_matrix.a;
+	b = text_matrix.b;
+	c = text_matrix.c;
+	d = text_matrix.d;
+	e = pen.x + text_matrix.tx * em;
+	f = pen.y + text_matrix.ty * em;
+	fn_content_printf(w, "BT\n/%s %.4f Tf\n%d Tr\n%.4f %.4f %.4f %.4f %.4f %.4f Tm\n<%04X> Tj\nET\n",
+			  resource->name, (double)font_size, mode, a, b, c, d, e, f, (unsigned)glyph);
+	return true;
+}
+
+/* ------------------------------------------------------------------------- */
 /* writing the file                                                          */
 /* ------------------------------------------------------------------------- */
 
@@ -1072,6 +1298,59 @@ bool cg_pdf_writer_close(struct cg_pdf_writer *w)
 	}
 	if (w->page_open) {
 		cg_pdf_writer_end_page(w);
+	}
+	/* EVERY FONT'S /W WAS LEFT OPEN SO A LATE GLYPH COULD BE ADDED; close them all now, and give each one the
+	 * /ToUnicode CMap that makes its glyph IDs searchable rather than merely drawable. */
+	{
+		size_t f;
+
+		for (f = 0; f < w->font_count; f++) {
+			struct cg_pdf_font_resource *font = &w->fonts[f];
+			cg_buf cmap = { 0 };
+			unsigned tounicode;
+			size_t g;
+			size_t written = 0;
+
+			fn_object_printf(w, font->descendant, "] >>");
+			fn_buf_printf(&cmap, "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n"
+					     "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n"
+					     "/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n"
+					     "1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n");
+			for (g = 0; g < font->glyph_count; g++) {
+				if (font->used != NULL && !font->used[g]) {
+					continue;
+				}
+				if (font->to_unicode == NULL || font->to_unicode[g] == 0 ||
+				    font->to_unicode[g] > 0xFFFF) {
+					continue;
+				}
+				if (written % 100 == 0) {
+					if (written > 0) {
+						fn_buf_printf(&cmap, "endbfchar\n");
+					}
+					fn_buf_printf(&cmap, "100 beginbfchar\n");
+				}
+				fn_buf_printf(&cmap, "<%04X> <%04X>\n", (unsigned)g, font->to_unicode[g]);
+				written++;
+			}
+			if (written > 0) {
+				fn_buf_printf(&cmap, "endbfchar\n");
+			}
+			fn_buf_printf(&cmap, "endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+			tounicode = fn_new_object(w);
+			if (tounicode != 0) {
+				fn_object_stream(w, tounicode, "", cmap.data, cmap.len);
+				/* THE TYPE0 BODY IS REBUILT, NOT APPENDED: the first version of this left the dictionary
+				 * written at creation in front of the one carrying /ToUnicode, and a reader stops at the first
+				 * `>>` — so the CMap existed and no font pointed at it. */
+				w->objects[font->object - 1].len = 0;
+				fn_object_printf(w, font->object,
+						 "<< /Type /Font /Subtype /Type0 /BaseFont /%s /Encoding /Identity-H "
+						 "/DescendantFonts [%u 0 R] /ToUnicode %u 0 R >>",
+						 font->base_name, font->descendant, tounicode);
+			}
+			fn_buf_free(&cmap);
+		}
 	}
 	w->closed = true;
 	if (w->page_count == 0) {
@@ -1206,6 +1485,16 @@ void cg_pdf_writer_free(struct cg_pdf_writer *w)
 	free(w->pages);
 	free(w->images);
 	free(w->gstates);
+	{
+		size_t f;
+
+		for (f = 0; f < w->font_count; f++) {
+			CGFontRelease(w->fonts[f].font);
+			free(w->fonts[f].used);
+			free(w->fonts[f].to_unicode);
+		}
+		free(w->fonts);
+	}
 	fn_buf_free(&w->content);
 	if (w->auxiliary != NULL) {
 		CFRelease(w->auxiliary);

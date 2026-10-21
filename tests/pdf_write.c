@@ -21,7 +21,9 @@
 #include <CoreGraphics/CGDataConsumer.h>
 #include <CoreGraphics/CGImage.h>
 #include <CoreGraphics/CGPDFContext.h>
+#include <CoreGraphics/CGPDFArray.h>
 #include <CoreGraphics/CGPDFDictionary.h>
+#include <CoreGraphics/CGPDFObject.h>
 #include <CoreGraphics/CGPDFDocument.h>
 #include <CoreGraphics/CGPDFPage.h>
 #include <CoreGraphics/CGPDFStream.h>
@@ -195,6 +197,41 @@ static CFDataRef fn_build_pdf(void)
 	return data;
 }
 
+/* WHAT A FONT RESOURCE SHOULD BE: a Type0 font whose descendant is a CIDFontType2 with a /FontFile2 behind it.
+ * This is the structural half of "the text is text" — the pixel half below only says the glyphs landed. */
+struct fn_font_probe {
+	int count;
+	int type0;
+	int embedded;
+};
+
+static void fn_font_entry(const char *key, CGPDFObjectRef value, void *info)
+{
+	struct fn_font_probe *probe = info;
+	CGPDFDictionaryRef font = NULL;
+	CGPDFArrayRef descendants = NULL;
+	CGPDFDictionaryRef descendant = NULL;
+	CGPDFDictionaryRef descriptor = NULL;
+	CGPDFStreamRef file = NULL;
+	const char *subtype = NULL;
+
+	(void)key;
+	probe->count++;
+	if (CGPDFObjectGetType(value) != kCGPDFObjectTypeDictionary ||
+	    !CGPDFObjectGetValue(value, kCGPDFObjectTypeDictionary, &font)) {
+		return;
+	}
+	if (CGPDFDictionaryGetName(font, "Subtype", &subtype) && strcmp(subtype, "Type0") == 0) {
+		probe->type0++;
+	}
+	if (CGPDFDictionaryGetArray(font, "DescendantFonts", &descendants) &&
+	    CGPDFArrayGetDictionary(descendants, 0, &descendant) &&
+	    CGPDFDictionaryGetDictionary(descendant, "FontDescriptor", &descriptor) &&
+	    CGPDFDictionaryGetStream(descriptor, "FontFile2", &file)) {
+		probe->embedded++;
+	}
+}
+
 static void fn_check_page_one(CGPDFDocumentRef document)
 {
 	CGPDFPageRef page = CGPDFDocumentGetPage(document, 1);
@@ -210,6 +247,51 @@ static void fn_check_page_one(CGPDFDocumentRef document)
 	if (page == NULL) {
 		CGColorSpaceRelease(rgb);
 		return;
+	}
+	{
+		CGPDFDictionaryRef page_dict = CGPDFPageGetDictionary(page);
+		CGPDFDictionaryRef resources = NULL;
+		CGPDFDictionaryRef fonts = NULL;
+		struct fn_font_probe probe = { 0, 0, 0 };
+
+		CHECK(page_dict != NULL && CGPDFDictionaryGetDictionary(page_dict, "Resources", &resources),
+		      "the written page has no /Resources");
+		CHECK(resources != NULL && CGPDFDictionaryGetDictionary(resources, "Font", &fonts),
+		      "the written page carries no /Font resource");
+		if (fonts != NULL) {
+			CGPDFDictionaryApply(fonts, fn_font_entry, &probe);
+		}
+		CHECK(probe.count > 0, "the page's /Font dictionary is empty");
+		CHECK(probe.type0 > 0, "the written text is not a Type0 font");
+		CHECK(probe.embedded > 0, "the written font has no embedded /FontFile2");
+	}
+	{
+		CGPDFDictionaryRef page_dict = CGPDFPageGetDictionary(page);
+		CGPDFStreamRef contents = NULL;
+
+		CHECK(page_dict != NULL && CGPDFDictionaryGetStream(page_dict, "Contents", &contents),
+		      "the page has no content stream");
+		if (contents != NULL) {
+			CGPDFDataFormat format;
+			CFDataRef bytes = CGPDFStreamCopyData(contents, &format);
+
+			CHECK(bytes != NULL, "the page's content stream did not decode");
+			if (bytes != NULL) {
+				const char *text = (const char *)CFDataGetBytePtr(bytes);
+				size_t length = (size_t)CFDataGetLength(bytes);
+				int has_tj = 0;
+				size_t i;
+
+				for (i = 0; i + 2 <= length; i++) {
+					if (text[i] == 'T' && text[i + 1] == 'j') {
+						has_tj = 1;
+						break;
+					}
+				}
+				CHECK(has_tj, "the written text was recorded as OUTLINES, not a Tj operator");
+				CFRelease(bytes);
+			}
+		}
 	}
 	memset(buffer, 0, sizeof buffer);
 	ctx = CGBitmapContextCreate(buffer, 200, 100, 8, 200 * 4, rgb,

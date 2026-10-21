@@ -90,6 +90,14 @@ void cg_pdf_writer_image(struct cg_pdf_writer *writer, CGRect rect, CGImageRef i
 			 const cg_pdf_paint_state *paint);
 void cg_pdf_writer_refuse(struct cg_pdf_writer *writer, const char *what);
 
+/* **A GLYPH AS TEXT, WHEN THE FACE CAN BE EMBEDDED.** True for a font this writer embedded (a TrueType/`glyf`
+ * program as a Type0/CIDFontType2 font, Identity-H) and false otherwise — a CFF or Type 1 face, or a face with
+ * no program behind it — in which case the caller draws the glyph's OUTLINE instead. `mode` is the text drawing
+ * mode's number: 0 fill, 1 stroke, 2 fill+stroke. */
+bool cg_pdf_writer_text_glyph(struct cg_pdf_writer *writer, CGFontRef font, CGGlyph glyph, CGPoint pen,
+			      CGFloat font_size, CGAffineTransform text_matrix, int mode,
+			      const cg_pdf_paint_state *paint);
+
 /* A CONTEXT WITH NO SURFACE, owned by the caller and pointing at `writer` (which the context then owns too). */
 CGContextRef cg_context_create_pdf(struct cg_pdf_writer *writer);
 struct cg_pdf_writer *cg_context_pdf_writer(CGContextRef context);

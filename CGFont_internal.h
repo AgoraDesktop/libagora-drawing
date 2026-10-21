@@ -174,6 +174,22 @@ CGGlyph cg_font_glyph_for_unichar(CGFontRef font, unsigned unichar);
  * `kCGFontIndexInvalid` when no such map exists (a TrueType face has none, and its codes go through the cmap). */
 CGGlyph cg_font_glyph_for_code(CGFontRef font, unsigned code);
 
+/* **THE FONT PROGRAM ITSELF, FOR A CALLER THAT MUST EMBED IT.** The provider is the one the face was opened
+ * from — a file for `CGFontCreateWithFontName`, the caller's bytes for `CGFontCreateWithDataProvider` — and it is
+ * retained for the caller. NULL for a face with no program behind it. */
+CGDataProviderRef cg_font_copy_provider(CGFontRef font);
+
+/* **WHETHER THIS FACE'S GLYPHS ARE `glyf` OUTLINES**, which is the question an embedder asks before writing a
+ * `/FontFile2`: TrueType and OpenType-with-TrueType-outlines say yes; a CFF/Type 1 face says no, because its
+ * program is not something a CIDFontType2 may point at. */
+bool cg_font_has_truetype_outlines(CGFontRef font);
+
+/* **GLYPH INDEX → UNICODE, WHICH IS WHAT A /ToUnicode CMap NEEDS.** Fills `map[glyph]` for as many glyphs as the
+ * face's Unicode char map names, leaving the rest zero, and answers how many it filled. The char map is restored
+ * afterwards. A glyph with no Unicode (a ligature the cmap does not name) stays zero and is simply absent from the
+ * CMap, which is the honest answer rather than a guess. */
+size_t cg_font_unicode_map(CGFontRef font, unsigned *map, size_t count);
+
 /* **THE PAIR ADJUSTMENT BETWEEN TWO GLYPHS, IN FONT UNITS, OR ZERO.** This is the `kern` table, which is what a
  * font's typographer wrote about specific pairs — `To`, `AV`, `P.` — as opposed to the per-glyph advance every
  * other door here answers. It exists because a LINE has to apply it: Core Text's typesetting kerns, and without
