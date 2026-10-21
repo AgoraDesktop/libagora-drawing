@@ -16,6 +16,13 @@ project(AgoraDrawing LANGUAGES C)
 
 include(GNUInstallDirs)
 
+# THE BUNDLED DEFAULT FONT SET'S INSTALLED LOCATION, compiled into the name registry so a fresh Agora install
+# finds its own faces before the host's. `FN_FONT_PATH` overrides the whole directory list at run time, which is
+# how a test or a user with a preferred set points the engine elsewhere. The data itself is `fonts/`, vendored
+# with provenance beside it (fonts/PROVENANCE.md) and installed under `share/fonts/agora`.
+set(AGORA_FONT_DIR "${CMAKE_INSTALL_FULL_DATADIR}/fonts/agora" CACHE PATH
+    "Directory the bundled Agora font set installs to, and the first directory the font registry searches")
+
 set(CMAKE_POSITION_INDEPENDENT_CODE YES)
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
@@ -70,6 +77,11 @@ add_library(Drawing SHARED ${DRAWING_SOURCES})
 
 set_target_properties(Drawing PROPERTIES OUTPUT_NAME agora-drawing)
 
+# THE REGISTRY'S FIRST DIRECTORY IS THIS ONE, and it is a compile-time fact rather than a guess about the prefix
+# at run time. A build configured against `build-prefix` embeds `build-prefix/share/fonts/agora`; a release
+# configured with `--prefix /usr` embeds `/usr/share/fonts/agora`.
+target_compile_definitions(Drawing PRIVATE AGORA_FONT_DIR="${AGORA_FONT_DIR}")
+
 # Core Foundation's public headers spell some doors with blocks, so every consumer of
 # <CoreGraphics/...> needs -fblocks (libagora-core carries the same INTERFACE flag).
 target_compile_options(Drawing
@@ -108,6 +120,13 @@ add_subdirectory(tests)
 
 install(DIRECTORY . DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/CoreGraphics
         FILES_MATCHING PATTERN "*.h")
+
+# THE DEFAULT FONT SET IS DATA, NOT CODE, and it installs as ordinary font files under `share/fonts/agora` so a
+# host tool that reads that tree sees the same faces the registry does. Each family carries its own licence, and
+# the set's provenance and checksums travel with it; no font is generated at install time.
+install(DIRECTORY fonts/ DESTINATION ${CMAKE_INSTALL_DATADIR}/fonts/agora)
+install(FILES fonts/PROVENANCE.md
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/libagora-drawing)
 install(TARGETS Drawing
     EXPORT AgoraDrawingTargets
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}

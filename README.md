@@ -26,6 +26,20 @@ Taken from the CoreGraphics in the Fiwix tree (`../Fiwix/userland/CoreGraphics`)
 **without** CoreFoundation. See [`PROVENANCE.md`](PROVENANCE.md) for the exact revision and what is
 being changed.
 
+## The default font set
+
+**Agora ships its own fonts, because inheriting the host's is how one desktop stops looking like one desktop.**
+`fonts/` holds an open-licensed set modelled on the roles macOS fills with its own catalogue — Inter for the
+system UI, Source Serif 4 for New York, IBM Plex Mono for SF Mono/Menlo, Liberation for the Helvetica/Arial,
+Times and Courier roles, and the display, handwriting and symbol faces recorded in `fonts/PROVENANCE.md`. No
+Apple font is included or redistributable.
+
+The set installs under `<prefix>/share/fonts/agora` and is **the first directory the name registry searches**
+(`AGORA_FONT_DIR` in `CMakeLists.txt`, compiled into `CGFont.c`). Host fonts are searched after it, and
+`FN_FONT_PATH` replaces the list. `CGFontAliases.c` maps macOS names to the bundled families only when the exact
+name is absent, so a real Helvetica on the host still wins. Every family carries its upstream licence; the
+three static instances and the families that reserve a name are recorded in `fonts/PROVENANCE.md`.
+
 ## Status
 
 **Built, shared, and C throughout, over Core Foundation — and the NS types are converted back to CF.**

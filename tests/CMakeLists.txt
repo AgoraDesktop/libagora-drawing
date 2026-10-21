@@ -14,10 +14,23 @@ add_executable(window_levels window_levels.c)
 target_link_libraries(window_levels PRIVATE Drawing CoreFoundation::CoreFoundation)
 
 add_test(NAME window-levels COMMAND window_levels)
+
+# THE DEFAULT FONT SET AND THE macOS COMPATIBILITY NAMES. `FN_FONT_PATH` points at the SOURCE tree's fonts, because
+# the installed copy does not exist yet when ctest runs against a build tree; the case is otherwise the real name
+# door. The source directory is passed as a compile definition rather than written into the test, so a relocated
+# checkout still runs.
+add_executable(fonts fonts.c)
+target_link_libraries(fonts PRIVATE Drawing CoreFoundation::CoreFoundation)
+target_compile_definitions(fonts PRIVATE
+  AGORA_TEST_FONT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fonts")
+
+add_test(NAME fonts COMMAND fonts)
 # The library's own dependencies (libobjc and Core Foundation's) live in the install prefix, and DT_RUNPATH is
 # NOT inherited by a transitive dependency — so the prefix's lib directory has to be on `LD_LIBRARY_PATH` for
 # the hops to resolve. The directories come from imported targets rather than being written down.
 set_tests_properties(drawing PROPERTIES ENVIRONMENT
   "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")
 set_tests_properties(window-levels PROPERTIES ENVIRONMENT
+  "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")
+set_tests_properties(fonts PROPERTIES ENVIRONMENT
   "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")

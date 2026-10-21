@@ -1168,13 +1168,24 @@ int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size, CGAf
 #include <dirent.h>
 #include <strings.h>
 
+/* **THE BUNDLED DEFAULT SET COMES FIRST, AND IT IS COMPILED IN RATHER THAN GUESSED.** The fonts Agora ships
+ * live under `<prefix>/share/fonts/agora`; putting that directory first is what makes a fresh Agora install look
+ * the same on every host instead of inheriting whichever families the distribution happened to install. A host
+ * that already has a face of the same name still wins a TIE only if it is found first, and it is not — the walk
+ * below keeps the FIRST of two equal-ranked matches, and this is the first directory. An administrator who wants
+ * the host's copy can put it earlier through `FN_FONT_PATH`, which replaces this list entirely. */
+#ifndef AGORA_FONT_DIR
+#define AGORA_FONT_DIR "/usr/local/share/fonts/agora"
+#endif
+
 /* **THE FONT DIRECTORIES, AND THE MAC'S ARE NOT ENOUGH — WHICH WAS MEASURED THE HARD WAY.** This list was four
  * Mac-shaped paths, and on Linux NOT ONE OF THEM EXISTS, so the registry enumerated nothing, every face lookup
  * answered NULL, every string measured zero, and a menu was a column of empty rows three layers above the cause.
  * The Mac's paths stay, because this tree does run there; the Linux and FreeBSD ones are added, because that is
  * what Agora is for. THE TWO LAYOUTS DIFFER and the walk below is what reconciles them. */
 static const char *fn_font_dirs[] = {
-	/* This tree's own staging, the two a Mac-shaped filesystem uses, then the flat one. */
+	/* Agora's own set, then this tree's staging and the Mac-shaped paths. */
+	AGORA_FONT_DIR,
 	"/System/Shared/Fonts",
 	"/System/Library/Fonts",
 	"/Library/Fonts",
@@ -1330,6 +1341,47 @@ static CGFontRef fn_create_name_in_directory(const char *directory, const char *
 	return best;
 }
 
+/* **ONE NAME, ONE PASS OVER THE REGISTRY.** The registered files come first, then the directories, and the best
+ * match is kept across directories rather than stopping at the first: a styled face found early must not end the
+ * search when a plain one is sitting in the next directory along. This is the exact-name half only; the alias
+ * fallback lives in the door below, so an exact match and a compatibility substitute are separate questions. */
+static CGFontRef fn_search_exact(const char *name, const char *const *dirs, int ndirs)
+{
+	CGFontRef best = NULL;
+	int i;
+
+	/* **THE REGISTERED PATHS COME FIRST**, because a caller that has just registered a font file expects the
+	 * name it registered to resolve to THAT file rather than to whatever a directory happens to hold under the
+	 * same name — and a registration is the more specific statement of the two. */
+	for (i = 0; i < fn_registered_count; i++) {
+		CGFontRef font = fn_try_file(fn_registered[i], name);
+
+		if (font != NULL) {
+			return font;
+		}
+	}
+	/* **AND THE BEST MATCH IS KEPT ACROSS DIRECTORIES TOO**, not just within one. */
+	for (i = 0; i < ndirs; i++) {
+		CGFontRef font = fn_create_name_in_directory(dirs[i], name, FN_FONT_MAX_DEPTH);
+
+		if (font == NULL) {
+			continue;
+		}
+		if (best == NULL || fn_match_rank(font, name) > fn_match_rank(best, name)) {
+			if (best != NULL) {
+				CGFontRelease(best);
+			}
+			best = font;
+		} else {
+			CGFontRelease(font);
+		}
+		if (fn_match_rank(best, name) >= 3) {
+			break;		/* the full name itself was asked for; nothing can beat that */
+		}
+	}
+	return best;
+}
+
 CGFontRef cg_font_create_with_name(const char *name)
 {
 	char override_buf[1024];
@@ -1372,40 +1424,21 @@ CGFontRef cg_font_create_with_name(const char *name)
 			}
 		}
 	}
-	/* **THE REGISTERED PATHS COME FIRST**, because a caller that has just registered a font file expects the
-	 * name it registered to resolve to THAT file rather than to whatever a directory happens to hold under the
-	 * same name — and a registration is the more specific statement of the two. */
-	for (i = 0; i < fn_registered_count; i++) {
-		CGFontRef font = fn_try_file(fn_registered[i], name);
-
-		if (font != NULL) {
-			fn_name_cache_put(name, font);
-			return font;
-		}
-	}
 	if (ndirs == 0) {
 		for (i = 0; i < (int)(sizeof fn_font_dirs / sizeof fn_font_dirs[0]); i++) {
 			dirs[ndirs++] = fn_font_dirs[i];
 		}
 	}
-	/* **AND THE BEST MATCH IS KEPT ACROSS DIRECTORIES TOO**, not just within one: a styled face found early must
-	 * not end the search when a plain one is sitting in the next directory along. */
-	for (i = 0; i < ndirs; i++) {
-		CGFontRef font = fn_create_name_in_directory(dirs[i], name, FN_FONT_MAX_DEPTH);
+	best = fn_search_exact(name, dirs, ndirs);
+	/* **AND ONLY IF THE NAME ITSELF IS ABSENT DOES THE macOS COMPATIBILITY TABLE SPEAK.** This ordering is the
+	 * whole contract: a host that really has `Helvetica` answers with its own `Helvetica`, and the substitute is
+	 * what a fresh Agora install gets instead of NULL. A substitute is a FAMILY or a FULL NAME, so a request for
+	 * `Helvetica-Bold` can land on a bold face rather than on the regular one. */
+	if (best == NULL) {
+		const char *substitute = cg_font_substitute_family(name);
 
-		if (font == NULL) {
-			continue;
-		}
-		if (best == NULL || fn_match_rank(font, name) > fn_match_rank(best, name)) {
-			if (best != NULL) {
-				CGFontRelease(best);
-			}
-			best = font;
-		} else {
-			CGFontRelease(font);
-		}
-		if (fn_match_rank(best, name) >= 3) {
-			break;		/* the full name itself was asked for; nothing can beat that */
+		if (substitute != NULL && strcasecmp(substitute, name) != 0) {
+			best = fn_search_exact(substitute, dirs, ndirs);
 		}
 	}
 	if (best != NULL) {

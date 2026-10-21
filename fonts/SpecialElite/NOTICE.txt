@@ -1,0 +1,6 @@
+Special Elite
+Copyright (c) 2010 by Brian J. Bonislawsky DBA Astigmatic (AOETI).
+All rights reserved. Available under the Apache License, Version 2.0.
+http://www.apache.org/licenses/LICENSE-2.0.html
+
+Special Elite is a trademark of Astigmatic (AOETI).

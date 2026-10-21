@@ -105,6 +105,13 @@ int cg_font_glyphs_for_unichars(CGFontRef font, const uint16_t *characters, CGGl
  * host probe reaches the tree's own directory. */
 CGFontRef cg_font_create_with_name(const char *name);
 
+/* **THE macOS COMPATIBILITY NAME, OR NULL.** `cg_font_create_with_name` asks this door ONLY after its exact
+ * search comes back empty, and searches for whatever it answers. The table lives in `CGFontAliases.c`, where the
+ * choices and their licences are recorded; a name that is not in it answers NULL, which is the same answer an
+ * unknown name got before the table existed. The result is a FAMILY or a FULL NAME, and the caller does not
+ * need to know which — it is searched exactly as a caller's own name would be. */
+const char *cg_font_substitute_family(const char *name);
+
 /* **AND THE OTHER DIRECTION: EVERY FACE, ONE AT A TIME, BY PATH.** The door above stops at the FIRST name
  * that matches, so walking the same directories to report ALL of them is a DIFFERENT LOOP rather than a copy
  * of it — and it lives in the same file so that the list of directories a font may live in (and the
