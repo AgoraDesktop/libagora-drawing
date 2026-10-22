@@ -210,6 +210,13 @@ static void fn_hex_bytes(eps_buf *b, const unsigned char *bytes, size_t count)
 	fn_buf_put(b, ">\n", 2);
 }
 
+/* RAW ASCII HEX FOR A FILTER: the filter consumes the `>` terminator, so a leading `<` would be read as data. */
+static void fn_hex_filter_data(eps_buf *b, const unsigned char *bytes, size_t count)
+{
+	fn_hex_digits(b, bytes, count);
+	fn_buf_put(b, ">\n", 2);
+}
+
 
 /* ------------------------------------------------------------------------- */
 /* paths                                                                     */
@@ -640,9 +647,8 @@ void cg_eps_writer_image(struct cg_eps_writer *w, CGRect rect, CGImageRef image,
 	fn_buf_printf(&w->body, "%zu %zu 8 [", width, height);
 	fn_buf_text(&w->body, "1 0 0 -1 0 ");
 	fn_num(&w->body, (double)height);
-	fn_buf_text(&w->body, "] ");
-	fn_hex_bytes(&w->body, rgb, width * height * 3);
-	fn_buf_text(&w->body, " false 3 colorimage\n");
+	fn_buf_text(&w->body, "] currentfile /ASCIIHexDecode filter false 3 colorimage\n");
+	fn_hex_filter_data(&w->body, rgb, width * height * 3);
 	fn_buf_text(&w->body, "grestore\n");
 	free(rgb);
 }
