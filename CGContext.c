@@ -5091,7 +5091,10 @@ static void cg_shading_paint(void *info, CGFloat x, CGFloat y, CGFloat rgba[4])
 void CGContextDrawShading(CGContextRef c, CGShadingRef shading)
 {
 	if (c != NULL && c->writer != NULL) {
-		cg_pdf_writer_refuse(c->writer, "shadings (CGContextDrawShading)");
+		cg_pdf_paint_state ps;
+
+		fn_pdf_paint_state(c, &ps);
+		(void)cg_pdf_writer_shading(c->writer, shading, &ps);
 		return;
 	}
 	pixman_image_t *src;

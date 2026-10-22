@@ -32,6 +32,8 @@
 #include <CoreGraphics/CGFont_internal.h>
 #include <CoreGraphics/CGPDFSubset.h>
 #include <CoreGraphics/CGGradient_internal.h>
+#include <CoreGraphics/CGShading_internal.h>
+#include <CoreGraphics/CGFunction_internal.h>
 
 #include <zlib.h>
 
@@ -1229,6 +1231,125 @@ bool cg_pdf_writer_gradient(struct cg_pdf_writer *w, CGGradientRef gradient, boo
 	fn_resource_add(&w->shadings, &w->shading_count, &w->shading_cap, name, shading);
 
 	/* THE GRADIENT'S OWN COLOURS ARE OPAQUE, so only the CONTEXT's alpha and blend apply. */
+	gs_paint = *paint;
+	gs_paint.fill[3] = 1.0;
+	gs_paint.stroke[3] = 1.0;
+	fn_content_printf(w, "q\n");
+	fn_emit_gstate(w, &gs_paint, true, false);
+	fn_content_printf(w, "/%s sh\nQ\n", name);
+	return true;
+}
+
+/* ONE SHADING, SAMPLED. A CGFunction is a CALLBACK, not a PDF function expression, so the only portable way to
+ * put it in a file is to evaluate it on a grid and write the samples down; 256 one-dimensional samples is what
+ * the gradient path already considers a ramp, and the sampled function interpolates between them. */
+bool cg_pdf_writer_shading(struct cg_pdf_writer *w, CGShadingRef shading, const cg_pdf_paint_state *paint)
+{
+	CGColorSpaceRef space;
+	CGFunctionRef function;
+	size_t components;
+	unsigned char *samples;
+	size_t sample_count = 256;
+	unsigned char *compressed = NULL;
+	size_t compressed_len = 0;
+	unsigned function_object;
+	unsigned shading_object;
+	CGPoint start;
+	CGPoint end;
+	CGFloat start_radius = 0;
+	CGFloat end_radius = 0;
+	bool extend_start = false;
+	bool extend_end = false;
+	bool radial;
+	char name[24];
+	cg_pdf_paint_state gs_paint;
+	cg_buf dict = { 0 };
+	size_t i;
+	size_t c;
+
+	if (w == NULL || shading == NULL || paint == NULL) {
+		return false;
+	}
+	if (!w->page_open) {
+		fprintf(stderr, "CG-REFUSE: a shading on a CGPDFContext with no page open was not recorded\n");
+		return false;
+	}
+	space = cg_shading_color_space(shading);
+	function = cg_shading_function(shading);
+	components = space != NULL ? CGColorSpaceGetNumberOfComponents(space) : 0;
+	if (function == NULL || (components != 1 && components != 3 && components != 4)) {
+		cg_pdf_writer_refuse(w, "a shading outside DeviceGray, DeviceRGB and DeviceCMYK");
+		return false;
+	}
+	samples = malloc(sample_count * components);
+	if (samples == NULL) {
+		return false;
+	}
+	for (i = 0; i < sample_count; i++) {
+		CGFloat input = (CGFloat)i / (CGFloat)(sample_count - 1);
+		CGFloat output[4] = { 0, 0, 0, 0 };
+
+		cg_function_evaluate(function, &input, output);
+		for (c = 0; c < components; c++) {
+			CGFloat value = output[c];
+
+			if (value < 0) value = 0;
+			if (value > 1) value = 1;
+			samples[i * components + c] = (unsigned char)(value * 255.0 + 0.5);
+		}
+	}
+	if (!fn_compress(samples, sample_count * components, &compressed, &compressed_len)) {
+		free(samples);
+		return false;
+	}
+	free(samples);
+
+	function_object = fn_new_object(w);
+	if (function_object == 0) {
+		free(compressed);
+		return false;
+	}
+	fn_object_printf(w, function_object,
+			 "<< /FunctionType 0 /Domain [0 1] /Range [");
+	for (c = 0; c < components; c++) {
+		fn_buf_printf(&w->objects[function_object - 1], "0 1 ");
+	}
+	fn_object_printf(w, function_object,
+			 "] /Size [%zu] /BitsPerSample 8 /Encode [0 255] /Filter /FlateDecode /Length %zu >>\nstream\n",
+			 sample_count, compressed_len);
+	fn_buf_put(&w->objects[function_object - 1], compressed, compressed_len);
+	fn_buf_put(&w->objects[function_object - 1], "\nendstream", 10);
+	free(compressed);
+
+	cg_shading_geometry(shading, &start, &end, &start_radius, &end_radius);
+	cg_shading_extend(shading, &extend_start, &extend_end);
+	radial = cg_shading_is_radial(shading);
+	shading_object = fn_new_object(w);
+	if (shading_object == 0) {
+		fn_buf_free(&dict);
+		return false;
+	}
+	fn_buf_printf(&dict, "/ColorSpace /%s", components == 1 ? "DeviceGray" :
+						     (components == 3 ? "DeviceRGB" : "DeviceCMYK"));
+	if (radial) {
+		fn_object_printf(w, shading_object,
+				 "<< /ShadingType 3 %s /Coords [%.4f %.4f %.4f %.4f %.4f %.4f] /Function %u 0 R "
+				 "/Extend [%s %s] >>",
+				 (const char *)dict.data, (double)start.x, (double)start.y, (double)start_radius,
+				 (double)end.x, (double)end.y, (double)end_radius, function_object,
+				 extend_start ? "true" : "false", extend_end ? "true" : "false");
+	} else {
+		fn_object_printf(w, shading_object,
+				 "<< /ShadingType 2 %s /Coords [%.4f %.4f %.4f %.4f] /Function %u 0 R "
+				 "/Extend [%s %s] >>",
+				 (const char *)dict.data, (double)start.x, (double)start.y, (double)end.x,
+				 (double)end.y, function_object, extend_start ? "true" : "false",
+				 extend_end ? "true" : "false");
+	}
+	fn_buf_free(&dict);
+	snprintf(name, sizeof name, "Sh%u", shading_object);
+	fn_resource_add(&w->shadings, &w->shading_count, &w->shading_cap, name, shading_object);
+
 	gs_paint = *paint;
 	gs_paint.fill[3] = 1.0;
 	gs_paint.stroke[3] = 1.0;

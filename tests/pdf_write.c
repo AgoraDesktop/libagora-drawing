@@ -19,6 +19,8 @@
 #include <CoreGraphics/CGColorSpace.h>
 #include <CoreGraphics/CGContext.h>
 #include <CoreGraphics/CGDataConsumer.h>
+#include <CoreGraphics/CGFunction.h>
+#include <CoreGraphics/CGShading.h>
 #include <CoreGraphics/CGImage.h>
 #include <CoreGraphics/CGPDFContext.h>
 #include <CoreGraphics/CGPDFArray.h>
@@ -102,6 +104,14 @@ static CGImageRef fn_make_image(int alpha)
 	CGDataProviderRelease(provider);
 	CGColorSpaceRelease(space);
 	return image;
+}
+
+static void fn_shading_evaluate(void *info, const CGFloat *input, CGFloat *output)
+{
+	(void)info;
+	output[0] = 1.0 - input[0];
+	output[1] = 0.0;
+	output[2] = input[0];
 }
 
 static CFDataRef fn_build_pdf(void)
@@ -204,6 +214,32 @@ static CFDataRef fn_build_pdf(void)
 			CGGradientRelease(gradient);
 		} else {
 			CHECK(0, "the gradient fixture was refused");
+		}
+		CGColorSpaceRelease(space);
+	}
+	/* A CGShading: its CGFunction is sampled into a type 0 function, and the geometry becomes a type 2
+	 * shading. Red at its start, blue at its end, inside its own clip. */
+	{
+		CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+		const CGFloat domain[2] = { 0, 1 };
+		const CGFloat range[6] = { 0, 1, 0, 1, 0, 1 };
+		CGFunctionCallbacks callbacks = { 0, fn_shading_evaluate, NULL };
+		CGFunctionRef function = CGFunctionCreate(NULL, 1, domain, 3, range, &callbacks);
+		CGShadingRef shading = function != NULL ?
+			CGShadingCreateAxial(space, CGPointMake(100, 45), CGPointMake(130, 45), function, true, true) :
+			NULL;
+
+		if (shading != NULL) {
+			CGContextSaveGState(ctx);
+			CGContextClipToRect(ctx, CGRectMake(100, 35, 30, 20));
+			CGContextDrawShading(ctx, shading);
+			CGContextRestoreGState(ctx);
+			CGShadingRelease(shading);
+		} else {
+			CHECK(0, "the CGShading fixture was refused");
+		}
+		if (function != NULL) {
+			CGFunctionRelease(function);
 		}
 		CGColorSpaceRelease(space);
 	}
@@ -422,6 +458,13 @@ static void fn_check_page_one(CGPDFDocumentRef document)
 	pixel_at(buffer, 200, 100, CGPointMake(115, 88), px);
 	CHECK(px[3] > 200 && px[0] > 150 && px[2] < 120,
 	      "the radial gradient's edge is B=%u G=%u R=%u A=%u, expected blue", px[0], px[1], px[2], px[3]);
+	/* THE CGShading: the caller's function sampled into a PDF function, drawn as a type 2 shading. */
+	pixel_at(buffer, 200, 100, CGPointMake(105, 45), px);
+	CHECK(px[3] > 200 && px[2] > 150 && px[0] < 120,
+	      "the CGShading's start is B=%u G=%u R=%u A=%u, expected red", px[0], px[1], px[2], px[3]);
+	pixel_at(buffer, 200, 100, CGPointMake(125, 45), px);
+	CHECK(px[3] > 200 && px[0] > 150 && px[2] < 120,
+	      "the CGShading's end is B=%u G=%u R=%u A=%u, expected blue", px[0], px[1], px[2], px[3]);
 
 	pixel_at(buffer, 200, 100, CGPointMake(80, 20), px);
 	/* THE DESTINATION IS PREMULTIPLIED, so a 50% red over transparent is R=A=128, not R=255. */

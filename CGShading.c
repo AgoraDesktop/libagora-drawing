@@ -195,3 +195,39 @@ void cg_shading_sample(CGShadingRef shading, CGFloat x, CGFloat y, CGFloat rgba[
 		rgba[3] = 0.0;
 	}
 }
+
+CGColorSpaceRef cg_shading_color_space(CGShadingRef shading)
+{
+	return shading != NULL ? shading->space : NULL;
+}
+
+CGFunctionRef cg_shading_function(CGShadingRef shading)
+{
+	return shading != NULL ? shading->function : NULL;
+}
+
+bool cg_shading_is_radial(CGShadingRef shading)
+{
+	return shading != NULL && shading->radial != 0;
+}
+
+void cg_shading_geometry(CGShadingRef shading, CGPoint *start, CGPoint *end, CGFloat *start_radius,
+			 CGFloat *end_radius)
+{
+	if (shading == NULL) {
+		return;
+	}
+	if (start != NULL) *start = shading->start;
+	if (end != NULL) *end = shading->end;
+	if (start_radius != NULL) *start_radius = shading->start_radius;
+	if (end_radius != NULL) *end_radius = shading->end_radius;
+}
+
+void cg_shading_extend(CGShadingRef shading, bool *extend_start, bool *extend_end)
+{
+	if (shading == NULL) {
+		return;
+	}
+	if (extend_start != NULL) *extend_start = shading->extend_start != 0;
+	if (extend_end != NULL) *extend_end = shading->extend_end != 0;
+}

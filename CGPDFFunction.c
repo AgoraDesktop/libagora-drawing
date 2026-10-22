@@ -225,7 +225,10 @@ cg_pdf_function *cg_pdf_function_create(cg_pdf_doc *doc, cg_pdf_obj *dict)
 			fn_free(function);
 			return NULL;
 		}
-		function->sample_bytes = total * (size_t)function->bits;
+		/* **A SAMPLE IS `outputs` VALUES, NOT ONE.** The first version counted only the table's entries, so a
+		 * three-output function copied the first 256 bytes of a 768-byte table — the red channel of every
+		 * sample — and a red-to-blue shading came out red-to-black. MEASURED by the CGShading round trip. */
+		function->sample_bytes = total * function->outputs * (size_t)function->bits;
 		function->sample_bytes = (function->sample_bytes + 7) / 8;
 		if ((size_t)CFDataGetLength(data) < function->sample_bytes) {
 			fprintf(stderr, "CG-REFUSE: a sampled PDF function's stream holds %ld bytes and its /Size "

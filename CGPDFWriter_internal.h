@@ -17,8 +17,8 @@
  *
  * WHAT IS RECORDED: `q`/`Q`, `cm`, path construction and painting, clips, images (with an /SMask when the image
  * has alpha), gradients (as axial/radial shadings with a stitching function), and text as real text or glyph
- * outlines. WHAT IS REFUSED BY NAME: `CGShading`, per-stop-alpha gradients, patterns, shadows, transparency
- * layers and clip-to-mask. Text is vector and correct but not selectable — embedding a font program
+ * outlines. WHAT IS REFUSED BY NAME: per-stop-alpha gradients, shadings outside DeviceGray/RGB/CMYK, patterns,
+ * shadows, transparency layers and clip-to-mask. Text is vector and correct but not selectable — embedding a font program
  * is a later landing, and calling an outline a glyph would be the sort of lie this tree refuses.
  */
 #ifndef CORE_GRAPHICS_CGPDFWRITER_INTERNAL_H
@@ -27,6 +27,7 @@
 #include <CoreGraphics/CGContext.h>
 #include <CoreGraphics/CGDataConsumer.h>
 #include <CoreGraphics/CGGradient.h>
+#include <CoreGraphics/CGShading.h>
 #include <CoreGraphics/CGImage.h>
 #include <CoreGraphics/CGPath.h>
 
@@ -98,6 +99,11 @@ void cg_pdf_writer_refuse(struct cg_pdf_writer *writer, const char *what);
 bool cg_pdf_writer_gradient(struct cg_pdf_writer *writer, CGGradientRef gradient, bool radial, CGPoint start0,
 			    CGFloat radius0, CGPoint start1, CGFloat radius1,
 			    CGGradientDrawingOptions options, const cg_pdf_paint_state *paint);
+
+/* **A CGShading, SAMPLED INTO A PDF SHADING.** The caller's CGFunction is evaluated at 256 parameters and the
+ * samples become a type 0 function; the geometry comes from the shading itself. DeviceGray, DeviceRGB and
+ * DeviceCMYK are the spaces written; any other is refused. */
+bool cg_pdf_writer_shading(struct cg_pdf_writer *writer, CGShadingRef shading, const cg_pdf_paint_state *paint);
 
 /* **A GLYPH AS TEXT, WHEN THE FACE CAN BE EMBEDDED.** True for a font this writer embedded (a TrueType/`glyf`
  * program as a Type0/CIDFontType2 font, Identity-H) and false otherwise — a CFF or Type 1 face, or a face with

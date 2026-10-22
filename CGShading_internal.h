@@ -25,4 +25,14 @@
  * reason (a transparent sample is a no-op under every operator pixman has). */
 void cg_shading_sample(CGShadingRef shading, CGFloat x, CGFloat y, CGFloat rgba[4]);
 
+/* **THE SHADING'S OWN STATE, FOR A CALLER THAT MUST WRITE IT DOWN.** The PDF writer samples the function and
+ * emits the geometry as a shading; these doors are the only way it can see either, because Apple's public
+ * CGShading.h has no getters. */
+CGColorSpaceRef cg_shading_color_space(CGShadingRef shading);
+CGFunctionRef cg_shading_function(CGShadingRef shading);
+bool cg_shading_is_radial(CGShadingRef shading);
+void cg_shading_geometry(CGShadingRef shading, CGPoint *start, CGPoint *end, CGFloat *start_radius,
+			 CGFloat *end_radius);
+void cg_shading_extend(CGShadingRef shading, bool *extend_start, bool *extend_end);
+
 #endif /* CORE_GRAPHICS_CGSHADING_INTERNAL_H */
