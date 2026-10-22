@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * A COLOUR IS A SPACE PLUS NUMBERS, and the numbers mean nothing without the space: 0.2 is a
  * dark red in an RGB space and a light gray in a grayscale one. So the space is PART of the

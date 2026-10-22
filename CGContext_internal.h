@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * ONE FUNCTION SO FAR, AND IT IS HERE FOR THE REASON CGPath_internal.h states: the SURFACE is what a
  * public header declares, and `CGContextResetClip` — absent from the 10.6 headers, so out of era — is

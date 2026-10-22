@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **THE TYPED DOORS ARE NOT CONVENIENCES, THEY ARE THE REFERENCE RESOLVER.** `CGPDFArrayGetDictionary(a, i)`
  * is `CGPDFArrayGetObject` followed by a resolve followed by a type check — and the resolve is the part a

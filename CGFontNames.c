@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THE SPLIT IS THE COLOUR SPACE'S, FOR THE SAME REASON: `CGFont.c` is C and does not know what an
  * `NSString` is (it hands out C strings, see CGFont_internal.h), and the doors whose Apple signatures

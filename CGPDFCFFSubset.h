@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **THE PDF WRITER SELECTS CFF GLYPHS BY NAME, NOT BY INDEX**, through a Type 1 font's /Encoding
  * /Differences. That is what makes subsetting a CFF simpler than subsetting `glyf`: the glyph NAMES and

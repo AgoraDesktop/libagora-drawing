@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **POSTScript'S MODEL, AND THAT IS NOT AN ANALOGY: PDF CONTENT IS A POSTFIX LANGUAGE.** A content stream is a
  * sequence of operands and operators; operands accumulate on a stack, and an operator consumes what it needs and

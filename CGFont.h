@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THE FONT OBJECT IS APPLE'S API; THE FACE IS FREETYPE'S. This is the first half of Core
  * Graphics' text surface, and it is deliberately the half that rasterises nothing: a font is

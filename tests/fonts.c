@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: GPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * WHAT THIS HOLDS UP. `fonts/PROVENANCE.md` says which open face fills each macOS role, and `CGFontAliases.c`
  * says what a request for a macOS name resolves to. Both are claims until a lookup proves them, so this case

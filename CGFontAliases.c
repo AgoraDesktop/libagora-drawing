@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **NO APPLE FONT IS HERE, AND NO APPLE NAME IS CLAIMED AS OURS.** Agora ships an open, redistributable set
  * (see `fonts/PROVENANCE.md`); macOS applications, nib files and design documents, however, ask for the names

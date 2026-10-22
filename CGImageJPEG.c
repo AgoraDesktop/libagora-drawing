@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THE DECODER IS LIBJPEG-TURBO (3.2.0, IJG + Modified BSD-3), VENDORED BY THIS TREE FOR EXACTLY THIS
  * and built by tools/libjpeg-build.sh. Unlike PNG — which rode the X stack and needed a link flag

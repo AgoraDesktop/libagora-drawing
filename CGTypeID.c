@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THE TYPE IS `CGTypeID`, THIS LIBRARY'S OWN NAME (CGBase.h says why, and keeps Apple's spelling as an
  * alias), and THE ANSWER IS A CONSTANT, and the two properties the API promises — the same class always

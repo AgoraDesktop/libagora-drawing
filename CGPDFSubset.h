@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **WHY RENUMBER AND NOT MERELY BLANK.** Emptying unused `glyf` data leaves `loca` and `hmtx` as large as the
  * original face: a 4,000-glyph font still pays 16 KB for each, and a CJK face's 65,000 glyphs pay a quarter of a

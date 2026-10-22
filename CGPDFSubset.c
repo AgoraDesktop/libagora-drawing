@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THE PROGRAM IS READ THROUGH FREETYPE'S OWN SFNT TABLE DOOR (`FT_Load_Sfnt_Table`), not by walking the file
  * again: the face has already parsed the directory and checked the table bounds, and a second parser here would

@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **THE DOCUMENT IS THE OWNER OF EVERYTHING BELOW IT.** Objects are parsed out of its bytes, its pages borrow
  * its dictionaries, and its cross-reference table is what makes an indirect reference answer at all. That is why

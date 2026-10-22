@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THE GEOMETRY IS NOT HERE, AND THAT IS THE WHOLE DESIGN OF C6.2. Where a parameter is for an axial
  * or a radial ramp, whether it exists at all, and what happens past its ends are `cg_paint_extend`

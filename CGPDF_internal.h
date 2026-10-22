@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **THE OBJECT GRAPH IS AN ARENA.** Every parsed object, name, string buffer and grown array is allocated
  * through `cg_pdf_alloc` and freed once, when the document is released. There is deliberately no per-object

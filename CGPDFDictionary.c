@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * A DICTIONARY IS A SMALL LINEAR TABLE, AND THAT IS THE RIGHT STRUCTURE HERE: PDF dictionaries are a handful of
  * keys, they are built once, and they are read a handful of times while a page is walked. A hash would be more

@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **EPS IS THE SAME SEAM AS PDF, WITH A DIFFERENT ALPHABET.** `CGContext.c` does not know which format it is
  * recording; it calls the `cg_pdf_writer_*` doors, and those doors dispatch here when the writer was made by

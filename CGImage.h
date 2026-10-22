@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * AN IMAGE IS PIXELS PLUS THEIR MEANING, and the meaning is not decoration: bits per component,
  * bits per pixel, bytes per row, the colour space, and WHICH BYTE IS WHICH CHANNEL are what turn a

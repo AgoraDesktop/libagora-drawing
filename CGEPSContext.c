@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * The thin half, exactly as `CGPDFContext.c` is thin: the page-info vocabulary is Apple's, the URL door turns a
  * URL into a consumer, and `Close` is the moment the bytes are written. The recording lives in CGEPSWriter.c

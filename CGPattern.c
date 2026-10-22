@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THE ONE PIECE OF REAL GEOMETRY HERE IS THE TILE LOOKUP, and it is worth stating in one place
  * because it is where a pattern goes wrong quietly. Given a point in the drawing context's user

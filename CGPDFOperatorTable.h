@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **AN OPERATOR TABLE IS WHAT MAKES THE SCANNER GENERIC.** The scanner knows how to tokenise a content stream and
  * how to hold operands; what `Tj`, `re` or `Do` MEAN is a callback the caller installs. That split is why the same

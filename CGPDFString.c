@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **A STRING IS BYTES AND ITS TEXT READING IS AN ENCODING GUESS WITH A RULE.** PDF 1.5 made the guess an
  * explicit one: a leading `FE FF` means UTF-16BE, and the absence of it means PDFDocEncoding — a variant of

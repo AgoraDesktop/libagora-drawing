@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **THE OBJECT IS SMALL BECAUSE THE ENCODER IS ELSEWHERE.** `cg_image_png_data` (in `CGImagePNG.c`, beside the
  * decoder) turns a `CGImage` into bytes; this file is the destination Apple's documentation describes — somewhere to

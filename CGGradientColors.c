@@ -4,7 +4,6 @@
  * Copyright © 2026 Kyle J. Cardoza.
  * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
  * SPDX-License-Identifier: LGPL-3.0-or-later
- * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THE ARRAY IS A CORE FOUNDATION ARRAY OF `CGColorRef`, which is Apple's signature: `CGGradientCreateWithColors`
  * takes a `CFArrayRef` whose elements are the colours themselves. The Fiwix tree wrapped each `CGColorRef` in an
