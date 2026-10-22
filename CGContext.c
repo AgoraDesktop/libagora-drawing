@@ -243,6 +243,10 @@ static void fn_pdf_paint_state(CGContextRef c, cg_pdf_paint_state *ps)
 		ps->dash[i] = c->state.dash[i];
 	}
 	ps->dash_phase = c->state.dash_phase;
+	ps->fill_pattern = c->state.fill_pattern;
+	ps->stroke_pattern = c->state.stroke_pattern;
+	ps->fill_pattern_alpha = c->state.fill_pattern_alpha;
+	ps->stroke_pattern_alpha = c->state.stroke_pattern_alpha;
 }
 
 /* FORWARD, BECAUSE THE COLOUR SETTERS COME FIRST IN THIS FILE AND THE PATTERN THEY MUST CLEAR IS
@@ -4377,8 +4381,23 @@ void CGContextSetFillPattern(CGContextRef c, CGPatternRef pattern, const CGFloat
 		return;
 	}
 	if (c->writer != NULL) {
-		cg_pdf_writer_refuse(c->writer, "pattern fills");
-		return;
+		if (pattern != NULL && components != NULL &&
+		    cg_pdf_writer_begin_pattern(c->writer, pattern)) {
+			void *info = NULL;
+			CGPatternCallbacks callbacks;
+
+			memset(&callbacks, 0, sizeof callbacks);
+			cg_pattern_state(pattern, &info, NULL, NULL, NULL, NULL, &callbacks);
+			CGContextSaveGState(c);
+			/* PATTERN SPACE IS THE TILE'S WHOLE COORDINATE SYSTEM. The callback paints into its own origin;
+			 * `/Matrix` in the pattern dictionary is what later maps that space onto the page. */
+			c->state.ctm = CGAffineTransformIdentity;
+			if (callbacks.drawPattern != NULL) {
+				callbacks.drawPattern(info, c);
+			}
+			CGContextRestoreGState(c);
+			cg_pdf_writer_end_pattern(c->writer, pattern);
+		}
 	}
 	if (pattern == NULL || components == NULL) {
 		fprintf(stderr, "CG-REFUSE: CGContextSetFillPattern needs a pattern and its components; "
@@ -4397,8 +4416,23 @@ void CGContextSetStrokePattern(CGContextRef c, CGPatternRef pattern, const CGFlo
 		return;
 	}
 	if (c->writer != NULL) {
-		cg_pdf_writer_refuse(c->writer, "pattern strokes");
-		return;
+		if (pattern != NULL && components != NULL &&
+		    cg_pdf_writer_begin_pattern(c->writer, pattern)) {
+			void *info = NULL;
+			CGPatternCallbacks callbacks;
+
+			memset(&callbacks, 0, sizeof callbacks);
+			cg_pattern_state(pattern, &info, NULL, NULL, NULL, NULL, &callbacks);
+			CGContextSaveGState(c);
+			/* PATTERN SPACE IS THE TILE'S WHOLE COORDINATE SYSTEM. The callback paints into its own origin;
+			 * `/Matrix` in the pattern dictionary is what later maps that space onto the page. */
+			c->state.ctm = CGAffineTransformIdentity;
+			if (callbacks.drawPattern != NULL) {
+				callbacks.drawPattern(info, c);
+			}
+			CGContextRestoreGState(c);
+			cg_pdf_writer_end_pattern(c->writer, pattern);
+		}
 	}
 	if (pattern == NULL || components == NULL) {
 		fprintf(stderr, "CG-REFUSE: CGContextSetStrokePattern needs a pattern and its "

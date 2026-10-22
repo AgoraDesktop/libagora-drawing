@@ -170,8 +170,11 @@ been converted back to CF", with lcms2 "not installed on this machine").
   shadings whose stitching function is built from the gradient's stops; a gradient with PER-STOP ALPHA is refused
   (no alpha channel in a DeviceRGB function, and no soft mask is written). **`CGContextDrawShading` IS RECORDED**
   for a DeviceGray, DeviceRGB or DeviceCMYK shade: its CGFunction is sampled into a type 0 function and the
-  geometry becomes a type 2 or 3 shading. The PDF context still REFUSES BY NAME patterns, shadows, transparency
-  layers and clip-to-mask, so a caller knows when a page lacks them.
+  geometry becomes a type 2 or 3 shading. **COLORED TILING PATTERNS ARE RECORDED**: the caller's `drawPattern` is
+  run into a pattern content stream (with its own `/Resources`, including whatever the tile uses), and the page
+  selects it with `/Pattern cs` and `scn` or `SCN`; this renderer draws one by rasterising the tile once and tiling
+  it through a CGPattern. The PDF context still REFUSES BY NAME uncolored patterns, shadows, transparency layers
+  and clip-to-mask, so a caller knows when a page lacks them.
 - **PDF encryption is reported, not decrypted.** `CGPDFDocumentIsEncrypted` answers true and the pages, catalog and
   info refuse by name; `IsUnlocked` is therefore false for an encrypted file and there is no password door.
 - **The scanner skips inline images rather than parsing them**, so the renderer does not draw them either, and

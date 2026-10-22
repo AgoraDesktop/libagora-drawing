@@ -31,6 +31,7 @@
  * approximated except the two colour models (`CalRGB`, `Lab`) whose formulas are standard but whose exact
  * white-point adaptation is not, and the stroked text-clip modes (6 and 7), which clip with the filled outline.
  */
+#include <CoreGraphics/CGBitmapContext.h>
 #include <CoreGraphics/CGContext.h>
 #include <CoreGraphics/CGFont_internal.h>
 #include <CoreGraphics/CGContext_internal.h>
@@ -94,6 +95,13 @@ typedef struct fn_state {
 	CGFloat dash[16];
 	size_t dash_count;
 	CGFloat dash_phase;
+
+	/* A TILING PATTERN AS THE FILL OR STROKE PAINT, when `scn`/`SCN` selected one. The SPACE flag is separate
+	 * because `/Pattern` is a built-in colour space, not a resource the page names. */
+	bool fill_pattern_space;
+	bool stroke_pattern_space;
+	cg_pdf_obj *fill_pattern_obj;
+	cg_pdf_obj *stroke_pattern_obj;
 } fn_state;
 
 struct fn_icc_entry {
@@ -131,6 +139,16 @@ typedef struct fn_render {
 	struct fn_font_entry *fonts;
 	size_t font_count;
 	size_t font_capacity;
+
+	/* THE PATTERNS RENDERED FOR THIS PAGE, keyed by their document object. A pattern's CGPattern owns its rendered
+	 * tile image and the buffer behind it; releasing the pattern releases both. */
+	struct fn_pdf_pattern {
+		cg_pdf_obj *object;
+		CGPatternRef pattern;
+	} *patterns;
+	size_t pattern_count;
+	size_t pattern_capacity;
+	int pattern_depth;
 
 	int form_depth;
 	bool warned_inline;
@@ -213,6 +231,27 @@ static size_t fn_space_components(cg_pdf_doc *doc, cg_pdf_obj *space)
 		if (strcmp(name, "Pattern") == 0) return 0;
 	}
 	return 0;
+}
+
+/* A PATTERN COLOUR SPACE, in either spelling: the name `/Pattern` or the array `[/Pattern base]`. */
+static bool fn_space_is_pattern(cg_pdf_doc *doc, cg_pdf_obj *space)
+{
+	cg_pdf_obj *family;
+
+	space = cg_pdf_resolve(doc, space);
+	if (space == NULL) {
+		return false;
+	}
+	if (space->type == kCGPDFObjectTypeName) {
+		return strcmp((const char *)space->u.name.bytes, "Pattern") == 0;
+	}
+	if (space->type == kCGPDFObjectTypeArray && space->u.array.count >= 1) {
+		family = cg_pdf_resolve(doc, space->u.array.items[0]);
+
+		return family != NULL && family->type == kCGPDFObjectTypeName &&
+		       strcmp((const char *)family->u.name.bytes, "Pattern") == 0;
+	}
+	return false;
 }
 
 static bool fn_icc_convert(fn_render *r, cg_pdf_obj *stream, const double *in, CGFloat rgb[3])
@@ -501,6 +540,15 @@ static void fn_set_components(fn_render *r, bool fill, const double *components,
 	int kind = fill ? r->state.fill_kind : r->state.stroke_kind;
 	CGFloat rgb[3] = { 0, 0, 0 };
 
+	/* A COLOUR REPLACES A PATTERN, which is the same rule `CGContextSetRGBFillColor` follows. */
+	if (fill) {
+		r->state.fill_pattern_obj = NULL;
+		r->state.fill_pattern_space = false;
+	} else {
+		r->state.stroke_pattern_obj = NULL;
+		r->state.stroke_pattern_space = false;
+	}
+
 	switch (kind) {
 	case FN_SPACE_GRAY:
 		rgb[0] = rgb[1] = rgb[2] = count > 0 ? (CGFloat)components[0] : 0;
@@ -638,6 +686,233 @@ static void fn_flush_clip(fn_render *r)
 	r->pending_clip_eo = false;
 }
 
+static void fn_run_content(fn_render *r, cg_pdf_obj *stream, cg_pdf_obj *resources);
+
+/* THE DEFAULT GRAPHICS STATE A CONTENT STREAM BEGINS IN: black fill and stroke, opaque, unit width, no transform,
+ * identity text matrices. The page renderer and a pattern tile both start here, so the two cannot disagree. */
+static void fn_state_default(fn_state *st)
+{
+	memset(st, 0, sizeof *st);
+	st->fill_kind = FN_SPACE_GRAY;
+	st->stroke_kind = FN_SPACE_GRAY;
+	st->fill_rgb[0] = st->fill_rgb[1] = st->fill_rgb[2] = 0;
+	st->stroke_rgb[0] = st->stroke_rgb[1] = st->stroke_rgb[2] = 0;
+	st->fill_alpha = 1;
+	st->stroke_alpha = 1;
+	st->tm = CGAffineTransformIdentity;
+	st->tlm = CGAffineTransformIdentity;
+	st->hscale = 1.0;
+	st->line_width = 1.0;
+	st->miter_limit = 10.0;
+	st->cap = kCGLineCapButt;
+	st->join = kCGLineJoinMiter;
+}
+
+struct fn_pattern_info {
+	CGImageRef image;
+	unsigned char *buffer;
+	CGRect bbox;
+};
+
+static void fn_pattern_draw(void *info, CGContextRef cg)
+{
+	struct fn_pattern_info *pattern = info;
+
+	CGContextDrawImage(cg, pattern->bbox, pattern->image);
+}
+
+static void fn_pattern_release(void *info)
+{
+	struct fn_pattern_info *pattern = info;
+
+	if (pattern == NULL) {
+		return;
+	}
+	if (pattern->image != NULL) {
+		CGImageRelease(pattern->image);
+	}
+	free(pattern->buffer);
+	free(pattern);
+}
+
+/* **A PDF TILING PATTERN BECOMES A CGPattern OVER A RENDERED TILE.** The tile's content stream is run into a
+ * bitmap just large enough for its /BBox, and the CGPattern's callback paints that bitmap into the cell; the
+ * matrix, steps and bounds are the dictionary's. CG's own pattern sampler then does the tiling, so a pattern is
+ * drawn by the same machinery a caller's CGPattern is. PaintType 2 (uncoloured) is refused: its cell would have
+ * to be drawn in the fill colour at paint time, and the content stream does not carry that. */
+static CGPatternRef fn_pattern_for(fn_render *r, cg_pdf_obj *object)
+{
+	size_t i;
+	cg_pdf_obj *dict;
+	cg_pdf_obj *resources;
+	CGRect bbox;
+	bool ok = false;
+	CGAffineTransform matrix = CGAffineTransformIdentity;
+	cg_pdf_obj *matrix_obj;
+	double x_step = 0;
+	double y_step = 0;
+	long long paint_type = 1;
+	size_t width;
+	size_t height;
+	unsigned char *buffer;
+	CGContextRef tile;
+	CGColorSpaceRef space;
+	CGImageRef image;
+	struct fn_pattern_info *info;
+	CGPatternCallbacks callbacks = { 0, fn_pattern_draw, fn_pattern_release };
+	CGPatternRef pattern;
+	fn_state saved_state;
+	CGContextRef saved_ctx;
+	CGPDFContentStreamRef saved_content;
+	cg_pdf_obj *saved_resources;
+	size_t saved_depth;
+	bool saved_pending;
+	bool saved_pending_eo;
+
+	for (i = 0; i < r->pattern_count; i++) {
+		if (r->patterns[i].object == object) {
+			return r->patterns[i].pattern;
+		}
+	}
+	if (r->pattern_depth >= 8) {
+		fprintf(stderr, "CG-REFUSE: patterns nested more than 8 deep\n");
+		return NULL;
+	}
+	if (object == NULL || object->type != kCGPDFObjectTypeStream) {
+		return NULL;
+	}
+	dict = object->u.stream.dict;
+	bbox = cg_pdf_rect_from_object(r->doc, cg_pdf_dict_get(r->doc, dict, "BBox"), &ok);
+	if (!ok || bbox.size.width <= 0 || bbox.size.height <= 0) {
+		fprintf(stderr, "CG-REFUSE: a tiling pattern has no usable /BBox\n");
+		return NULL;
+	}
+	matrix_obj = cg_pdf_dict_get(r->doc, dict, "Matrix");
+	if (matrix_obj != NULL && matrix_obj->type == kCGPDFObjectTypeArray && matrix_obj->u.array.count >= 6) {
+		double m[6];
+		size_t k;
+
+		for (k = 0; k < 6; k++) {
+			cg_pdf_number(r->doc, matrix_obj->u.array.items[k], &m[k]);
+		}
+		matrix = CGAffineTransformMake((CGFloat)m[0], (CGFloat)m[1], (CGFloat)m[2], (CGFloat)m[3],
+					       (CGFloat)m[4], (CGFloat)m[5]);
+	}
+	cg_pdf_number(r->doc, cg_pdf_dict_get(r->doc, dict, "XStep"), &x_step);
+	cg_pdf_number(r->doc, cg_pdf_dict_get(r->doc, dict, "YStep"), &y_step);
+	if (x_step <= 0 || y_step <= 0) {
+		fprintf(stderr, "CG-REFUSE: a tiling pattern has no positive /XStep and /YStep\n");
+		return NULL;
+	}
+	cg_pdf_integer(r->doc, cg_pdf_dict_get(r->doc, dict, "PaintType"), &paint_type);
+	if (paint_type != 1) {
+		fprintf(stderr, "CG-REFUSE: an uncoloured tiling pattern (PaintType 2) is not painted by this "
+				"renderer\n");
+		return NULL;
+	}
+	width = (size_t)ceil(bbox.size.width);
+	height = (size_t)ceil(bbox.size.height);
+	if (width == 0 || height == 0 || width > 2048 || height > 2048) {
+		fprintf(stderr, "CG-REFUSE: a tiling pattern's cell is %zux%zu, which is outside this renderer's "
+				"1..2048 range\n", width, height);
+		return NULL;
+	}
+	buffer = calloc(height, width * 4);
+	if (buffer == NULL) {
+		return NULL;
+	}
+	space = CGColorSpaceCreateDeviceRGB();
+	tile = CGBitmapContextCreate(buffer, width, height, 8, width * 4, space,
+				     kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+	CGColorSpaceRelease(space);
+	if (tile == NULL) {
+		free(buffer);
+		return NULL;
+	}
+	CGContextClearRect(tile, CGRectMake(0, 0, (CGFloat)width, (CGFloat)height));
+	CGContextTranslateCTM(tile, -bbox.origin.x, -bbox.origin.y);
+	CGContextClipToRect(tile, CGRectMake(0, 0, (CGFloat)width, (CGFloat)height));
+
+	saved_ctx = r->ctx;
+	saved_state = r->state;
+	saved_content = r->content;
+	saved_resources = r->page_resources;
+	saved_depth = r->depth;
+	saved_pending = r->pending_clip;
+	saved_pending_eo = r->pending_clip_eo;
+
+	r->ctx = tile;
+	fn_state_default(&r->state);
+	r->depth = 0;
+	r->pending_clip = false;
+	r->pending_clip_eo = false;
+	r->pattern_depth++;
+	resources = cg_pdf_dict_get(r->doc, dict, "Resources");
+	fn_run_content(r, object, resources);
+	r->pattern_depth--;
+	r->ctx = saved_ctx;
+	r->state = saved_state;
+	r->content = saved_content;
+	r->page_resources = saved_resources;
+	r->depth = saved_depth;
+	r->pending_clip = saved_pending;
+	r->pending_clip_eo = saved_pending_eo;
+
+
+	image = CGBitmapContextCreateImage(tile);
+	CGContextRelease(tile);
+	if (image == NULL) {
+		free(buffer);
+		return NULL;
+	}
+	info = calloc(1, sizeof *info);
+	if (info == NULL) {
+		CGImageRelease(image);
+		free(buffer);
+		return NULL;
+	}
+	info->image = image;
+	info->buffer = buffer;
+	info->bbox = bbox;
+	pattern = CGPatternCreate(info, bbox, matrix, (CGFloat)x_step, (CGFloat)y_step,
+				  kCGPatternTilingNoDistortion, true, &callbacks);
+	if (pattern == NULL) {
+		fn_pattern_release(info);
+		return NULL;
+	}
+	if (r->pattern_count == r->pattern_capacity) {
+		size_t cap = r->pattern_capacity ? r->pattern_capacity * 2 : 8;
+		struct fn_pdf_pattern *grown = realloc(r->patterns, cap * sizeof *grown);
+
+		if (grown == NULL) {
+			CGPatternRelease(pattern);
+			return NULL;
+		}
+		r->patterns = grown;
+		r->pattern_capacity = cap;
+	}
+	r->patterns[r->pattern_count].object = object;
+	r->patterns[r->pattern_count].pattern = pattern;
+	r->pattern_count++;
+	return pattern;
+}
+
+static bool fn_apply_pattern(fn_render *r, cg_pdf_obj *object, bool fill)
+{
+	CGPatternRef pattern = fn_pattern_for(r, object);
+	const CGFloat components[1] = { 1.0 };
+
+	if (pattern == NULL) {
+		return false;
+	}
+	if (fill) {
+		CGContextSetFillPattern(r->ctx, pattern, components);
+	} else {
+		CGContextSetStrokePattern(r->ctx, pattern, components);
+	}
+	return true;
+}
+
 static void fn_paint(fn_render *r, int mode, bool close)
 {
 	if (close) {
@@ -657,6 +932,19 @@ static void fn_paint(fn_render *r, int mode, bool close)
 		}
 		r->pending_clip = false;
 		r->pending_clip_eo = false;
+	}
+	{
+		bool fill = mode == kCGPathFill || mode == kCGPathFillStroke || mode == kCGPathEOFill ||
+			    mode == kCGPathEOFillStroke;
+		bool stroke = mode == kCGPathStroke || mode == kCGPathFillStroke || mode == kCGPathEOFillStroke;
+
+		if ((fill && r->state.fill_pattern_obj != NULL &&
+		     !fn_apply_pattern(r, r->state.fill_pattern_obj, true)) ||
+		    (stroke && r->state.stroke_pattern_obj != NULL &&
+		     !fn_apply_pattern(r, r->state.stroke_pattern_obj, false))) {
+			CGContextBeginPath(r->ctx);
+			return;
+		}
 	}
 	if (mode == kCGPathFill || mode == kCGPathFillStroke || mode == kCGPathEOFill ||
 	    mode == kCGPathEOFillStroke) {
@@ -1647,7 +1935,28 @@ static void fn_op_Wstar(CGPDFScannerRef s, void *info)
  * fields, so a later `scn` knows how many operands to expect and how to convert them. */
 static void fn_set_space(fn_render *r, bool fill, cg_pdf_obj *space)
 {
-	size_t components = fn_space_components(r->doc, space);
+	size_t components;
+
+	if (fn_space_is_pattern(r->doc, space)) {
+		if (fill) {
+			r->state.fill_kind = FN_SPACE_OBJECT;
+			r->state.fill_space = space;
+			r->state.fill_pattern_space = true;
+			r->state.fill_pattern_obj = NULL;
+		} else {
+			r->state.stroke_kind = FN_SPACE_OBJECT;
+			r->state.stroke_space = space;
+			r->state.stroke_pattern_space = true;
+			r->state.stroke_pattern_obj = NULL;
+		}
+		return;
+	}
+	if (fill) {
+		r->state.fill_pattern_space = false;
+	} else {
+		r->state.stroke_pattern_space = false;
+	}
+	components = fn_space_components(r->doc, space);
 
 	if (components == 0 && !cg_pdf_name_is(r->doc, space, "Pattern")) {
 		fprintf(stderr, "CG-REFUSE: a colour space with no readable component count was not set\n");
@@ -1673,7 +1982,15 @@ static void fn_op_CS(CGPDFScannerRef s, void *info)
 	const char *name = NULL;
 
 	if (CGPDFScannerPopName(s, &name)) {
-		fn_set_space(r, false, (cg_pdf_obj *)CGPDFContentStreamGetResource(r->content, "ColorSpace", name));
+		if (strcmp(name, "Pattern") == 0) {
+			r->state.stroke_kind = FN_SPACE_OBJECT;
+			r->state.stroke_space = NULL;
+			r->state.stroke_pattern_space = true;
+			r->state.stroke_pattern_obj = NULL;
+		} else {
+			fn_set_space(r, false,
+				     (cg_pdf_obj *)CGPDFContentStreamGetResource(r->content, "ColorSpace", name));
+		}
 	}
 }
 
@@ -1683,7 +2000,15 @@ static void fn_op_cs(CGPDFScannerRef s, void *info)
 	const char *name = NULL;
 
 	if (CGPDFScannerPopName(s, &name)) {
-		fn_set_space(r, true, (cg_pdf_obj *)CGPDFContentStreamGetResource(r->content, "ColorSpace", name));
+		if (strcmp(name, "Pattern") == 0) {
+			r->state.fill_kind = FN_SPACE_OBJECT;
+			r->state.fill_space = NULL;
+			r->state.fill_pattern_space = true;
+			r->state.fill_pattern_obj = NULL;
+		} else {
+			fn_set_space(r, true,
+				     (cg_pdf_obj *)CGPDFContentStreamGetResource(r->content, "ColorSpace", name));
+		}
 	}
 }
 
@@ -1695,10 +2020,27 @@ static void fn_pop_components(fn_render *r, CGPDFScannerRef s, bool fill)
 	cg_pdf_obj *space = fill ? r->state.fill_space : r->state.stroke_space;
 	size_t i;
 
-	if (cg_pdf_name_is(r->doc, space, "Pattern")) {
-		if (!r->warned_pattern) {
-			fprintf(stderr, "CG-REFUSE: a pattern colour is not painted by this renderer\n");
-			r->warned_pattern = true;
+	if (fill ? r->state.fill_pattern_space : r->state.stroke_pattern_space) {
+		const char *name = NULL;
+		cg_pdf_obj *pattern;
+
+		if (!CGPDFScannerPopName(s, &name)) {
+			return;
+		}
+		pattern = cg_pdf_resolve(r->doc,
+					 (cg_pdf_obj *)CGPDFContentStreamGetResource(r->content, "Pattern", name));
+		if (pattern == NULL || pattern->type != kCGPDFObjectTypeStream) {
+			if (!r->warned_pattern) {
+				fprintf(stderr, "CG-REFUSE: a pattern colour names `%s`, which the page's /Pattern "
+						"resources do not define\n", name);
+				r->warned_pattern = true;
+			}
+			return;
+		}
+		if (fill) {
+			r->state.fill_pattern_obj = pattern;
+		} else {
+			r->state.stroke_pattern_obj = pattern;
 		}
 		return;
 	}
@@ -2130,20 +2472,7 @@ void CGContextDrawPDFPage(CGContextRef c, CGPDFPageRef page)
 	r.doc = doc;
 	r.content = content;
 	r.page_resources = doc->pages[cg_pdf_page_index(page)].resources;
-	memset(&r.state, 0, sizeof r.state);
-	r.state.fill_kind = FN_SPACE_GRAY;
-	r.state.stroke_kind = FN_SPACE_GRAY;
-	r.state.fill_rgb[0] = r.state.fill_rgb[1] = r.state.fill_rgb[2] = 0;
-	r.state.stroke_rgb[0] = r.state.stroke_rgb[1] = r.state.stroke_rgb[2] = 0;
-	r.state.fill_alpha = 1;
-	r.state.stroke_alpha = 1;
-	r.state.tm = CGAffineTransformIdentity;
-	r.state.tlm = CGAffineTransformIdentity;
-	r.state.hscale = 1.0;
-	r.state.line_width = 1.0;
-	r.state.miter_limit = 10.0;
-	r.state.cap = kCGLineCapButt;
-	r.state.join = kCGLineJoinMiter;
+	fn_state_default(&r.state);
 	fn_apply_fill(&r);
 	fn_apply_stroke(&r);
 	fn_apply_line(&r);
@@ -2157,6 +2486,10 @@ void CGContextDrawPDFPage(CGContextRef c, CGPDFPageRef page)
 		}
 		CGPDFOperatorTableRelease(table);
 	}
+	for (i = 0; i < r.pattern_count; i++) {
+		CGPatternRelease(r.patterns[i].pattern);
+	}
+	free(r.patterns);
 	for (i = 0; i < r.font_count; i++) {
 		cg_pdf_font_free(r.fonts[i].font);
 	}

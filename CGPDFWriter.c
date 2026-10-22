@@ -31,6 +31,7 @@
 #include <CoreGraphics/CGImage_internal.h>
 #include <CoreGraphics/CGFont_internal.h>
 #include <CoreGraphics/CGPDFSubset.h>
+#include <CoreGraphics/CGPattern_internal.h>
 #include <CoreGraphics/CGGradient_internal.h>
 #include <CoreGraphics/CGShading_internal.h>
 #include <CoreGraphics/CGFunction_internal.h>
@@ -137,6 +138,18 @@ struct cg_pdf_resource {
 	unsigned number;
 };
 
+struct cg_pdf_pattern_entry {
+	CGPatternRef pattern;
+	unsigned object;
+	char name[24];
+};
+
+struct cg_pdf_content_frame {
+	cg_buf content;
+	unsigned pattern_object;
+	CGPatternRef pattern;
+};
+
 struct cg_pdf_gstate {
 	int ca;			/* thousandths */
 	int CA;
@@ -212,6 +225,12 @@ struct cg_pdf_writer {
 	struct cg_pdf_resource *shadings;
 	size_t shading_count;
 	size_t shading_cap;
+	struct cg_pdf_pattern_entry *patterns;
+	size_t pattern_count;
+	size_t pattern_cap;
+	struct cg_pdf_content_frame *frames;
+	size_t frame_count;
+	size_t frame_cap;
 	struct cg_pdf_gstate *gstates;
 	size_t gstate_count;
 	size_t gstate_cap;
@@ -461,6 +480,45 @@ static void fn_build_gstate_dict(cg_buf *b, const struct cg_pdf_gstate *entries,
 	fn_buf_printf(b, ">> ");
 }
 
+/* THE RESOURCES OF THE CURRENT CONTENT, built in one place because a page and a tiling pattern need the same
+ * dictionary. A PATTERN'S /Resources MUST NAME EVERYTHING ITS TILE USES — the objects are document-level, but a
+ * form-like content stream does not inherit the page's resource dictionary — so this is called after the tile has
+ * been recorded and includes whatever the callback added. */
+static void fn_build_resources(struct cg_pdf_writer *w, cg_buf *out)
+{
+	size_t f;
+
+	fn_buf_printf(out, "/ProcSet [/PDF] ");
+	fn_build_resource_dict(out, "XObject", w->images, w->image_count);
+	fn_build_resource_dict(out, "Shading", w->shadings, w->shading_count);
+	if (w->pattern_count > 0) {
+		size_t p;
+
+		fn_buf_printf(out, "/Pattern << ");
+		for (p = 0; p < w->pattern_count; p++) {
+			fn_buf_printf(out, "/%s %u 0 R ", w->patterns[p].name, w->patterns[p].object);
+		}
+		fn_buf_printf(out, ">> ");
+	}
+	fn_build_gstate_dict(out, w->gstates, w->gstate_count);
+	if (w->font_count > 0) {
+		fn_buf_printf(out, "/Font << ");
+		for (f = 0; f < w->font_count; f++) {
+			if (w->fonts[f].kind == 1) {
+				size_t shard;
+
+				for (shard = 0; shard < w->fonts[f].shard_count; shard++) {
+					fn_buf_printf(out, "/%s %u 0 R ", w->fonts[f].shards[shard].name,
+						      w->fonts[f].shards[shard].object);
+				}
+			} else {
+				fn_buf_printf(out, "/%s %u 0 R ", w->fonts[f].name, w->fonts[f].object);
+			}
+		}
+		fn_buf_printf(out, ">> ");
+	}
+}
+
 void cg_pdf_writer_end_page(struct cg_pdf_writer *w)
 {
 	unsigned content_num;
@@ -473,28 +531,7 @@ void cg_pdf_writer_end_page(struct cg_pdf_writer *w)
 	content_num = fn_new_object(w);
 	fn_object_stream(w, content_num, "", w->content.data, w->content.len);
 
-	fn_buf_printf(&resources, "/ProcSet [/PDF] ");
-	fn_build_resource_dict(&resources, "XObject", w->images, w->image_count);
-	fn_build_resource_dict(&resources, "Shading", w->shadings, w->shading_count);
-	fn_build_gstate_dict(&resources, w->gstates, w->gstate_count);
-	if (w->font_count > 0) {
-		size_t f;
-
-		fn_buf_printf(&resources, "/Font << ");
-		for (f = 0; f < w->font_count; f++) {
-			if (w->fonts[f].kind == 1) {
-				size_t s;
-
-				for (s = 0; s < w->fonts[f].shard_count; s++) {
-					fn_buf_printf(&resources, "/%s %u 0 R ", w->fonts[f].shards[s].name,
-						      w->fonts[f].shards[s].object);
-				}
-			} else {
-				fn_buf_printf(&resources, "/%s %u 0 R ", w->fonts[f].name, w->fonts[f].object);
-			}
-		}
-		fn_buf_printf(&resources, ">> ");
-	}
+	fn_build_resources(w, &resources);
 
 	page_num = fn_new_object(w);
 	if (page_num != 0) {
@@ -778,10 +815,16 @@ static unsigned fn_gstate_for(struct cg_pdf_writer *w, double ca, double CA, CGB
 	return number;
 }
 
+static struct cg_pdf_pattern_entry *fn_pattern_lookup(struct cg_pdf_writer *w, CGPatternRef pattern);
+
 static void fn_emit_gstate(struct cg_pdf_writer *w, const cg_pdf_paint_state *paint, bool fill, bool stroke)
 {
-	double ca = fn_clamp01(paint->alpha * (fill ? paint->fill[3] : 1.0));
-	double CA = fn_clamp01(paint->alpha * (stroke ? paint->stroke[3] : 1.0));
+	double ca = fn_clamp01(paint->alpha *
+			       (fill ? (paint->fill_pattern != NULL ? paint->fill_pattern_alpha : paint->fill[3])
+				     : 1.0));
+	double CA = fn_clamp01(paint->alpha *
+			       (stroke ? (paint->stroke_pattern != NULL ? paint->stroke_pattern_alpha
+								       : paint->stroke[3]) : 1.0));
 	unsigned number;
 
 	/* **ALWAYS EMITTED, INCLUDING THE OPAQUE CASE.** A `gs` is part of the PDF graphics state, and a restore
@@ -795,16 +838,37 @@ static void fn_emit_gstate(struct cg_pdf_writer *w, const cg_pdf_paint_state *pa
 	}
 }
 
-static void fn_emit_fill_colour(struct cg_pdf_writer *w, const cg_pdf_paint_state *paint)
+static bool fn_emit_fill_colour(struct cg_pdf_writer *w, const cg_pdf_paint_state *paint)
 {
+	if (paint->fill_pattern != NULL) {
+		struct cg_pdf_pattern_entry *entry = fn_pattern_lookup(w, paint->fill_pattern);
+
+		if (entry == NULL) {
+			cg_pdf_writer_refuse(w, "a fill with a pattern that was not recorded");
+			return false;
+		}
+		fn_content_printf(w, "/Pattern cs /%s scn\n", entry->name);
+		return true;
+	}
 	fn_content_printf(w, "%.4f %.4f %.4f rg\n", (double)fn_clamp01(paint->fill[0]),
 			  (double)fn_clamp01(paint->fill[1]), (double)fn_clamp01(paint->fill[2]));
+	return true;
 }
 
-static void fn_emit_stroke_colour(struct cg_pdf_writer *w, const cg_pdf_paint_state *paint)
+static bool fn_emit_stroke_colour(struct cg_pdf_writer *w, const cg_pdf_paint_state *paint)
 {
-	fn_content_printf(w, "%.4f %.4f %.4f RG\n", (double)fn_clamp01(paint->stroke[0]),
-			  (double)fn_clamp01(paint->stroke[1]), (double)fn_clamp01(paint->stroke[2]));
+	if (paint->stroke_pattern != NULL) {
+		struct cg_pdf_pattern_entry *entry = fn_pattern_lookup(w, paint->stroke_pattern);
+
+		if (entry == NULL) {
+			cg_pdf_writer_refuse(w, "a stroke with a pattern that was not recorded");
+			return false;
+		}
+		fn_content_printf(w, "/Pattern CS /%s SCN\n", entry->name);
+	} else {
+		fn_content_printf(w, "%.4f %.4f %.4f RG\n", (double)fn_clamp01(paint->stroke[0]),
+				  (double)fn_clamp01(paint->stroke[1]), (double)fn_clamp01(paint->stroke[2]));
+	}
 	fn_content_printf(w, "%.4f w\n%d J\n%d j\n%.4f M\n", (double)paint->line_width, paint->cap, paint->join,
 			  (double)paint->miter_limit);
 	if (paint->dash_count > 0) {
@@ -818,6 +882,7 @@ static void fn_emit_stroke_colour(struct cg_pdf_writer *w, const cg_pdf_paint_st
 	} else {
 		fn_content_printf(w, "[] 0 d\n");
 	}
+	return true;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -842,11 +907,11 @@ void cg_pdf_writer_paint_path(struct cg_pdf_writer *w, CGPathRef path, int opera
 		return;
 	}
 	fn_emit_gstate(w, paint, fill, stroke);
-	if (fill) {
-		fn_emit_fill_colour(w, paint);
+	if (fill && !fn_emit_fill_colour(w, paint)) {
+		return;
 	}
-	if (stroke) {
-		fn_emit_stroke_colour(w, paint);
+	if (stroke && !fn_emit_stroke_colour(w, paint)) {
+		return;
 	}
 	if (!fn_serialise_path(&w->content, path)) {
 		return;
@@ -1075,6 +1140,129 @@ void cg_pdf_writer_image(struct cg_pdf_writer *w, CGRect rect, CGImageRef image,
 	fn_emit_gstate(w, paint, true, false);
 	fn_content_printf(w, "%.4f 0 0 %.4f %.4f %.4f cm\n/%s Do\nQ\n", (double)rect.size.width,
 			  (double)rect.size.height, (double)rect.origin.x, (double)rect.origin.y, name);
+}
+
+/* ------------------------------------------------------------------------- */
+/* tiling patterns                                                           */
+/* ------------------------------------------------------------------------- */
+
+static struct cg_pdf_pattern_entry *fn_pattern_lookup(struct cg_pdf_writer *w, CGPatternRef pattern)
+{
+	size_t i;
+
+	for (i = 0; i < w->pattern_count; i++) {
+		if (w->patterns[i].pattern == pattern) {
+			return &w->patterns[i];
+		}
+	}
+	return NULL;
+}
+
+static void fn_emit_pattern(struct cg_pdf_writer *w, unsigned object, CGPatternRef pattern, cg_buf *tile)
+{
+	void *info = NULL;
+	CGRect bounds = CGRectZero;
+	CGAffineTransform matrix = CGAffineTransformIdentity;
+	CGFloat x_step = 0;
+	CGFloat y_step = 0;
+	CGPatternCallbacks callbacks;
+	cg_buf resources = { 0 };
+
+	cg_pattern_state(pattern, &info, &bounds, &matrix, &x_step, &y_step, &callbacks);
+	fn_build_resources(w, &resources);
+	fn_object_printf(w, object,
+			 "<< /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 "
+			 "/BBox [%.4f %.4f %.4f %.4f] /XStep %.4f /YStep %.4f "
+			 "/Matrix [%.4f %.4f %.4f %.4f %.4f %.4f] /Resources << %s >> /Length %zu >>\nstream\n",
+			 (double)bounds.origin.x, (double)bounds.origin.y,
+			 (double)(bounds.origin.x + bounds.size.width),
+			 (double)(bounds.origin.y + bounds.size.height), (double)x_step, (double)y_step,
+			 (double)matrix.a, (double)matrix.b, (double)matrix.c, (double)matrix.d,
+			 (double)matrix.tx, (double)matrix.ty,
+			 resources.data != NULL ? (const char *)resources.data : "", tile->len);
+	fn_buf_put(&w->objects[object - 1], tile->data, tile->len);
+	fn_buf_put(&w->objects[object - 1], "\nendstream", 10);
+	fn_buf_free(&resources);
+	(void)info;
+	(void)callbacks;
+}
+
+bool cg_pdf_writer_begin_pattern(struct cg_pdf_writer *w, CGPatternRef pattern)
+{
+	struct cg_pdf_content_frame *frame;
+	unsigned object;
+
+	if (w == NULL || pattern == NULL || !w->page_open) {
+		return false;
+	}
+	if (fn_pattern_lookup(w, pattern) != NULL) {
+		return false;
+	}
+	if (w->frame_count >= 16) {
+		cg_pdf_writer_refuse(w, "a pattern nested more than 16 deep");
+		return false;
+	}
+	if (w->frame_count == w->frame_cap) {
+		size_t cap = w->frame_cap ? w->frame_cap * 2 : 4;
+		struct cg_pdf_content_frame *grown = realloc(w->frames, cap * sizeof *grown);
+
+		if (grown == NULL) {
+			return false;
+		}
+		w->frames = grown;
+		w->frame_cap = cap;
+	}
+	object = fn_new_object(w);
+	if (object == 0) {
+		return false;
+	}
+	frame = &w->frames[w->frame_count++];
+	frame->content = w->content;
+	memset(&w->content, 0, sizeof w->content);
+	frame->pattern = pattern;
+	frame->pattern_object = object;
+	return true;
+}
+
+void cg_pdf_writer_end_pattern(struct cg_pdf_writer *w, CGPatternRef pattern)
+{
+	struct cg_pdf_content_frame *frame;
+	cg_buf tile;
+	unsigned object;
+
+	if (w == NULL || w->frame_count == 0 || pattern == NULL) {
+		return;
+	}
+	frame = &w->frames[w->frame_count - 1];
+	if (frame->pattern != pattern) {
+		fprintf(stderr, "CG-REFUSE: a pattern's content frame does not match the pattern ending it\n");
+		return;
+	}
+	tile = w->content;
+	w->content = frame->content;
+	object = frame->pattern_object;
+	w->frame_count--;
+
+	fn_emit_pattern(w, object, pattern, &tile);
+	fn_buf_free(&tile);
+
+	if (w->pattern_count == w->pattern_cap) {
+		size_t cap = w->pattern_cap ? w->pattern_cap * 2 : 8;
+		struct cg_pdf_pattern_entry *grown = realloc(w->patterns, cap * sizeof *grown);
+
+		if (grown == NULL) {
+			return;
+		}
+		w->patterns = grown;
+		w->pattern_cap = cap;
+	}
+	{
+		struct cg_pdf_pattern_entry *entry = &w->patterns[w->pattern_count++];
+
+		entry->pattern = CGPatternRetain(pattern);
+		entry->object = object;
+		snprintf(entry->name, sizeof entry->name, "P%u", object);
+	}
 }
 
 /* ------------------------------------------------------------------------- */
@@ -2159,6 +2347,22 @@ void cg_pdf_writer_free(struct cg_pdf_writer *w)
 	free(w->pages);
 	free(w->images);
 	free(w->shadings);
+	{
+		size_t p;
+
+		for (p = 0; p < w->pattern_count; p++) {
+			CGPatternRelease(w->patterns[p].pattern);
+		}
+		free(w->patterns);
+	}
+	{
+		size_t fr;
+
+		for (fr = 0; fr < w->frame_count; fr++) {
+			fn_buf_free(&w->frames[fr].content);
+		}
+		free(w->frames);
+	}
 	free(w->gstates);
 	{
 		size_t f;

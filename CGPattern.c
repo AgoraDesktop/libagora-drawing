@@ -128,6 +128,20 @@ CGPatternRef CGPatternCreate(void *info, CGRect bounds, CGAffineTransform matrix
 	return pattern;
 }
 
+void cg_pattern_state(CGPatternRef pattern, void **info, CGRect *bounds, CGAffineTransform *matrix,
+		      CGFloat *x_step, CGFloat *y_step, CGPatternCallbacks *callbacks)
+{
+	if (pattern == NULL) {
+		return;
+	}
+	if (info != NULL) *info = pattern->info;
+	if (bounds != NULL) *bounds = pattern->bounds;
+	if (matrix != NULL) *matrix = pattern->matrix;
+	if (x_step != NULL) *x_step = pattern->x_step;
+	if (y_step != NULL) *y_step = pattern->y_step;
+	if (callbacks != NULL) *callbacks = pattern->callbacks;
+}
+
 CGPatternRef CGPatternRetain(CGPatternRef pattern)
 {
 	if (pattern != NULL) {

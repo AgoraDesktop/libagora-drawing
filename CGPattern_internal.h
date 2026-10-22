@@ -40,4 +40,10 @@ void cg_pattern_cell_free(cg_pattern_cell *cell);
 void cg_pattern_sample(CGPatternRef pattern, cg_pattern_cell *cell, CGSize phase, CGFloat x,
 		       CGFloat y, CGFloat rgba[4]);
 
+/* **THE PATTERN'S OWN STATE, FOR THE PDF WRITER.** The writer has to run the caller's `drawPattern` itself — into a
+ * content-stream buffer rather than a cell — and it needs the cell's bounds, matrix, steps and callbacks to write
+ * the tiling-pattern dictionary. Apple's public header exposes none of them, which is why this is internal. */
+void cg_pattern_state(CGPatternRef pattern, void **info, CGRect *bounds, CGAffineTransform *matrix,
+		      CGFloat *x_step, CGFloat *y_step, CGPatternCallbacks *callbacks);
+
 #endif /* CORE_GRAPHICS_CGPATTERN_INTERNAL_H */

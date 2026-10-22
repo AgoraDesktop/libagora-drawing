@@ -106,6 +106,15 @@ static CGImageRef fn_make_image(int alpha)
 	return image;
 }
 
+static void fn_pattern_draw(void *info, CGContextRef cg)
+{
+	(void)info;
+	CGContextSetRGBFillColor(cg, 1.0, 0.0, 0.0, 1.0);
+	CGContextFillRect(cg, CGRectMake(0.0, 0.0, 4.0, 4.0));
+	CGContextSetRGBFillColor(cg, 0.0, 0.0, 1.0, 1.0);
+	CGContextFillRect(cg, CGRectMake(4.0, 4.0, 4.0, 4.0));
+}
+
 static void fn_shading_evaluate(void *info, const CGFloat *input, CGFloat *output)
 {
 	(void)info;
@@ -243,6 +252,31 @@ static CFDataRef fn_build_pdf(void)
 		}
 		CGColorSpaceRelease(space);
 	}
+	/* A COLORED TILING PATTERN: the callback paints red and blue squares in an 8x8 cell, tiled on a 10-point
+	 * lattice. The writer runs the callback into a pattern content stream; the page selects it with `scn`. */
+	{
+		CGPatternCallbacks callbacks = { 0, fn_pattern_draw, NULL };
+		CGPatternRef pattern = CGPatternCreate(NULL, CGRectMake(0, 0, 8, 8), CGAffineTransformIdentity,
+						       10, 10, kCGPatternTilingNoDistortion, true, &callbacks);
+
+		if (pattern != NULL) {
+			const CGFloat components[1] = { 1.0 };
+
+			CGContextSaveGState(ctx);
+			CGContextSetFillPattern(ctx, pattern, components);
+			CGContextFillRect(ctx, CGRectMake(10, 45, 60, 10));
+			CGContextRestoreGState(ctx);
+			/* THE STROKE HALF: `/Pattern CS` and `SCN`, and a patterned border. */
+			CGContextSaveGState(ctx);
+			CGContextSetStrokePattern(ctx, pattern, components);
+			CGContextSetLineWidth(ctx, 3);
+			CGContextStrokeRect(ctx, CGRectMake(75, 45, 20, 12));
+			CGContextRestoreGState(ctx);
+			CGPatternRelease(pattern);
+		} else {
+			CHECK(0, "the pattern fixture was refused");
+		}
+	}
 	CGPDFContextEndPage(ctx);
 
 	/* PAGE TWO, with its own media box in the page-info dictionary. */
@@ -340,9 +374,14 @@ static void fn_check_page_one(CGPDFDocumentRef document)
 		{
 			CGPDFDictionaryRef shadings = NULL;
 
+			CGPDFDictionaryRef patterns = NULL;
+
 			CHECK(CGPDFDictionaryGetDictionary(resources, "Shading", &shadings) &&
 			      CGPDFDictionaryGetCount(shadings) >= 1,
 			      "the page carries no /Shading resource for its gradient");
+			CHECK(CGPDFDictionaryGetDictionary(resources, "Pattern", &patterns) &&
+			      CGPDFDictionaryGetCount(patterns) >= 1,
+			      "the page carries no /Pattern resource for its tiling pattern");
 		}
 	}
 	{
@@ -379,6 +418,8 @@ static void fn_check_page_one(CGPDFDocumentRef document)
 						}
 					}
 					CHECK(has_sh, "the gradient was not recorded as a `sh` operator");
+					CHECK(strstr(text, "/Pattern cs") != NULL,
+					      "the tiling pattern was not selected with a Pattern colour space");
 				}
 				CFRelease(bytes);
 			}
@@ -465,6 +506,28 @@ static void fn_check_page_one(CGPDFDocumentRef document)
 	pixel_at(buffer, 200, 100, CGPointMake(125, 45), px);
 	CHECK(px[3] > 200 && px[0] > 150 && px[2] < 120,
 	      "the CGShading's end is B=%u G=%u R=%u A=%u, expected blue", px[0], px[1], px[2], px[3]);
+
+	/* THE PATTERN: red and blue squares in a 10-point lattice, sampled inside their own quarters. */
+	pixel_at(buffer, 200, 100, CGPointMake(12, 52), px);
+	CHECK(px[3] > 200 && px[2] > 150 && px[0] < 120,
+	      "the pattern's red square is B=%u G=%u R=%u A=%u", px[0], px[1], px[2], px[3]);
+	pixel_at(buffer, 200, 100, CGPointMake(16, 46), px);
+	CHECK(px[3] > 200 && px[0] > 150 && px[2] < 120,
+	      "the pattern's blue square is B=%u G=%u R=%u A=%u", px[0], px[1], px[2], px[3]);
+	{
+		int border_ink = 0;
+
+		for (x = 74; x <= 96 && !border_ink; x++) {
+			for (y = 44; y <= 58; y++) {
+				pixel_at(buffer, 200, 100, CGPointMake((CGFloat)x, (CGFloat)y), px);
+				if (px[3] > 150) {
+					border_ink = 1;
+					break;
+				}
+			}
+		}
+		CHECK(border_ink, "the patterned stroke painted nothing along its border");
+	}
 
 	pixel_at(buffer, 200, 100, CGPointMake(80, 20), px);
 	/* THE DESTINATION IS PREMULTIPLIED, so a 50% red over transparent is R=A=128, not R=255. */

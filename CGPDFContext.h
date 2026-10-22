@@ -20,9 +20,11 @@
  * AXIAL AND RADIAL GRADIENTS ARE RECORDED, as PDF shadings with a stitching function built from their stops; a
  * gradient whose stops carry PER-STOP ALPHA is refused (a DeviceRGB function has no alpha channel and a soft mask
  * is not written). `CGContextDrawShading` is recorded too: a shade in DeviceGray, DeviceRGB or DeviceCMYK is
- * SAMPLED into a type 0 function, because a CGFunction is a callback rather than a PDF function expression.
- * Patterns, shadows, transparency layers and clip-to-mask are REFUSED BY NAME (`CG-REFUSE`), so a caller learns
- * they were not recorded instead of receiving a page that quietly lacks them.
+ * SAMPLED into a type 0 function, because a CGFunction is a callback rather than a PDF function expression. **COLORED
+ * TILING PATTERNS ARE RECORDED**: the caller's `drawPattern` runs into a pattern content stream, and the page
+ * selects it with `scn`/`SCN` (the CGPattern object this library creates is always colored and no-distortion).
+ * Shadows, transparency layers and clip-to-mask are REFUSED BY NAME (`CG-REFUSE`), so a caller learns they were not
+ * recorded instead of receiving a page that quietly lacks them.
  *
  * THE AUXILIARY AND PAGE-INFO DICTIONARIES are Apple's: the keys below, a `CFStringRef` value for each textual
  * field, and a `CFDataRef` wrapping a `CGRect` for each box.
