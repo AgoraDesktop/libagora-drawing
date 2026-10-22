@@ -38,6 +38,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 static int failures;
@@ -51,6 +52,39 @@ static int failures;
 			fprintf(stderr, "\n"); \
 		} \
 	} while (0)
+
+/* THE `CFF ` TABLE'S LENGTH IN THE OTF, so the test can tell a subset from the whole program. */
+static long fn_cff_table_length(const char *path)
+{
+	FILE *file = fopen(path, "rb");
+	unsigned char header[12];
+	unsigned tables;
+	unsigned i;
+	long result = -1;
+
+	if (file == NULL) {
+		return -1;
+	}
+	if (fread(header, 1, sizeof header, file) != sizeof header) {
+		fclose(file);
+		return -1;
+	}
+	tables = ((unsigned)header[4] << 8) | header[5];
+	for (i = 0; i < tables; i++) {
+		unsigned char entry[16];
+
+		if (fread(entry, 1, sizeof entry, file) != sizeof entry) {
+			break;
+		}
+		if (entry[0] == 'C' && entry[1] == 'F' && entry[2] == 'F' && entry[3] == ' ') {
+			result = ((long)entry[12] << 24) | ((long)entry[13] << 16) | ((long)entry[14] << 8) |
+				 entry[15];
+			break;
+		}
+	}
+	fclose(file);
+	return result;
+}
 
 static const char *fn_find_cff_font(void)
 {
@@ -74,6 +108,7 @@ struct fn_fonts {
 	int count;
 	int type1;
 	int type1c;
+	long file_length;
 };
 
 static void fn_font_entry(const char *key, CGPDFObjectRef value, void *info)
@@ -99,7 +134,12 @@ static void fn_font_entry(const char *key, CGPDFObjectRef value, void *info)
 
 		if (dict != NULL && CGPDFDictionaryGetName(dict, "Subtype", &subtype) &&
 		    strcmp(subtype, "Type1C") == 0) {
+			CGPDFInteger length = 0;
+
 			fonts->type1c++;
+			if (CGPDFDictionaryGetInteger(dict, "Length", &length)) {
+				fonts->file_length = (long)length;
+			}
 		}
 	}
 }
@@ -266,6 +306,15 @@ int main(void)
 		CHECK(probe.count == 1, "the CFF page names %d fonts, expected 1", probe.count);
 		CHECK(probe.type1 == 1, "the CFF font is not a Type 1 font");
 		CHECK(probe.type1c == 1, "the CFF font has no /FontFile3 /Type1C program");
+		{
+			long whole = fn_cff_table_length(path);
+
+			CHECK(whole > 0, "the test could not read the font's CFF table length");
+			CHECK(probe.file_length > 0, "the written /FontFile3 has no length");
+			CHECK(whole > 0 && probe.file_length < whole,
+			      "the written CFF is %ld bytes and the whole program is %ld — it was not subsetted",
+			      probe.file_length, whole);
+		}
 		CHECK(fn_content_has_tj(page), "the CFF text was written as outlines, not Tj");
 		fn_check_pixels(page);
 	}

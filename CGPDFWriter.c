@@ -30,6 +30,7 @@
 #include <CoreGraphics/CGColorSpace.h>
 #include <CoreGraphics/CGImage_internal.h>
 #include <CoreGraphics/CGFont_internal.h>
+#include <CoreGraphics/CGPDFCFFSubset.h>
 #include <CoreGraphics/CGPDFSubset.h>
 #include <CoreGraphics/CGPattern_internal.h>
 #include <CoreGraphics/CGGradient_internal.h>
@@ -2091,9 +2092,54 @@ static void fn_finalise_cff_font(struct cg_pdf_writer *w, struct cg_pdf_font_res
 {
 	CFDataRef program = cg_font_copy_cff_program(font->font);
 	size_t shard_index;
+	unsigned *used = NULL;
+	size_t used_count = 0;
+	size_t used_cap = 0;
+	cg_pdf_cff_subset *subset = NULL;
+	const unsigned char *program_bytes;
+	size_t program_len;
+	const char *base_name = font->base_name;
+	char tagged_name[128];
 
 	if (program == NULL) {
 		return;
+	}
+	/* THE USED GLYPHS ACROSS EVERY SHARD. The subsetter keeps the CFF's NAMES and SIDs, so /Differences
+	 * continues to select the same glyphs after the CharStrings INDEX is renumbered. */
+	for (shard_index = 0; shard_index < font->shard_count; shard_index++) {
+		struct cg_pdf_shard *shard = &font->shards[shard_index];
+		unsigned code;
+
+		for (code = 1; code <= shard->max_code; code++) {
+			if (!shard->used[code]) {
+				continue;
+			}
+			if (used_count == used_cap) {
+				size_t cap = used_cap ? used_cap * 2 : 16;
+				unsigned *grown = realloc(used, cap * sizeof *grown);
+
+				if (grown == NULL) {
+					free(used);
+					CFRelease(program);
+					return;
+				}
+				used = grown;
+				used_cap = cap;
+			}
+			used[used_count++] = shard->codes[code];
+		}
+	}
+	subset = cg_pdf_cff_subset_create(CFDataGetBytePtr(program), (size_t)CFDataGetLength(program), used,
+					  used_count);
+	free(used);
+	program_bytes = subset != NULL ? cg_pdf_cff_subset_data(subset, &program_len) :
+					 CFDataGetBytePtr(program);
+	if (subset == NULL) {
+		program_len = (size_t)CFDataGetLength(program);
+	} else {
+		/* THE SIX-LETTER TAG TELLS A READER THESE GLYPH INDICES ARE THE SUBSET'S OWN NUMBERING. */
+		snprintf(tagged_name, sizeof tagged_name, "AGORAC+%s", font->base_name);
+		base_name = tagged_name;
 	}
 	for (shard_index = 0; shard_index < font->shard_count; shard_index++) {
 		struct cg_pdf_shard *shard = &font->shards[shard_index];
@@ -2103,13 +2149,12 @@ static void fn_finalise_cff_font(struct cg_pdf_writer *w, struct cg_pdf_font_res
 		unsigned code;
 		size_t written = 0;
 
-		fn_object_stream(w, shard->font_file, "/Subtype /Type1C", CFDataGetBytePtr(program),
-				 (size_t)CFDataGetLength(program));
+		fn_object_stream(w, shard->font_file, "/Subtype /Type1C", program_bytes, program_len);
 		fn_object_printf(w, shard->descriptor,
 				 "<< /Type /FontDescriptor /FontName /%s /Flags 32 /FontBBox [-200 -300 1200 900] "
 				 "/ItalicAngle 0 /Ascent %d /Descent %d /CapHeight %d /StemV 80 "
 				 "/FontFile3 %u 0 R >>",
-				 font->base_name, font->ascent, font->descent, font->cap_height, shard->font_file);
+				 base_name, font->ascent, font->descent, font->cap_height, shard->font_file);
 		fn_buf_printf(&widths, "[");
 		for (code = 1; code <= shard->max_code; code++) {
 			fn_buf_printf(&widths, "%u ", shard->used[code] ? shard->widths[code] : 0);
@@ -2158,13 +2203,14 @@ static void fn_finalise_cff_font(struct cg_pdf_writer *w, struct cg_pdf_font_res
 				 "<< /Type /Font /Subtype /Type1 /BaseFont /%s /FirstChar 1 /LastChar %u "
 				 "/Widths %s /Encoding << /Type /Encoding /Differences %s >> "
 				 "/FontDescriptor %u 0 R /ToUnicode %u 0 R >>",
-				 font->base_name, shard->max_code,
+				 base_name, shard->max_code,
 				 widths.data != NULL ? (const char *)widths.data : "[]",
 				 differences.data != NULL ? (const char *)differences.data : "[]",
 				 shard->descriptor, shard->tounicode);
 		fn_buf_free(&widths);
 		fn_buf_free(&differences);
 	}
+	cg_pdf_cff_subset_free(subset);
 	CFRelease(program);
 }
 

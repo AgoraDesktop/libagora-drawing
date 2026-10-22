@@ -90,7 +90,10 @@ searchable at any scale. **THE PROGRAM IS SUBSETTED**: only the glyphs the docum
 components and `.notdef` are kept, renumbered, and named through a `/CIDToGIDMap`; the content streams carry CIDs,
 so the renumbering never rewrites a page. A two-glyph page's font is a few kilobytes rather than the whole face,
 and `pdffonts` reports the six-letter subset tag. **A NON-CID-KEYED CFF FACE IS EMBEDDED TOO**, as a PDF Type 1
-font: the bare `CFF ` table becomes `/FontFile3 /Type1C`, each used glyph gets a one-byte code and a
+font, and its program is SUBSETTED: only the used glyphs' charstrings are kept, the charset is rebuilt with the
+same SIDs (so `/Differences` still selects by name), and the Private DICT with its Local Subrs travels whole. A
+`seac`-style charstring, a CID-keyed CFF or an Expert charset makes the subsetter fall back to the whole program
+rather than risk a wrong one; the bare `CFF ` table becomes `/FontFile3 /Type1C`, each used glyph gets a one-byte code and a
 `/Differences` name from the CFF charset, and a face using more than 255 glyphs is split across shards — the
 255-code limit is PDF's, not this writer's. A CFF program is embedded WHOLE (CFF subsetting is a different problem
 from `glyf` subsetting) and a CID-keyed CFF still falls back to outlines; `tests/pdf_cff.c` checks the structure,
@@ -164,9 +167,10 @@ been converted back to CF", with lcms2 "not installed on this machine").
 
 - **PDF EMBEDS TRUETYPE AND NON-CID CFF; NOT TYPE 1 OR CID-KEYED CFF.** A Type 1 face has no `/FontFile2` or
   `/Type1C` route here, and a CID-keyed CFF cannot be a simple Type 1 font, so both fall back to outlines; the
-  writer names that fallback when it happens. CFF programs are embedded whole rather than subsetted. TrueType
-  subsetting keeps the glyphs and their composites, not the shaping tables (`GSUB`, `GPOS`, `kern`) — a PDF places
-  every glyph explicitly, so those cannot affect the page. **AXIAL AND RADIAL GRADIENTS ARE RECORDED** as PDF
+  writer names that fallback when it happens. CFF subsetting is conservative — CID-keyed CFF, Expert charsets and
+  `seac` charstrings embed whole — but the common non-CID face is reduced to its used glyphs. Both subsetters keep
+  the glyphs and their composites, not the shaping tables (`GSUB`, `GPOS`, `kern`): a PDF places every glyph
+  explicitly, so those cannot affect the page. **AXIAL AND RADIAL GRADIENTS ARE RECORDED** as PDF
   shadings whose stitching function is built from the gradient's stops; a gradient with PER-STOP ALPHA is refused
   (no alpha channel in a DeviceRGB function, and no soft mask is written). **`CGContextDrawShading` IS RECORDED**
   for a DeviceGray, DeviceRGB or DeviceCMYK shade: its CGFunction is sampled into a type 0 function and the
