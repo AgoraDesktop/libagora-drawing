@@ -52,7 +52,12 @@ typedef struct CGRect {
  * makers and readers below, which are spelled after it). What a vector WAS is a direction with no
  * position — `CGVectorMake(dx, dy)` — and the era spells that as the two numbers it always was. */
 
-typedef enum {
+/* THE ATTRIBUTE IS WHAT MAKES THE CASES CASES: a plain C enum imports into Swift as
+ * a struct, while `enum_extensibility(open)` imports as an enum whose constants are
+ * cases (`CGRectEdge.minXEdge`). The attribute is clang's directly rather than
+ * through Foundation's NS_ENUM, because Core Graphics does not depend on
+ * Foundation. */
+typedef enum __attribute__((enum_extensibility(open))) CGRectEdge : unsigned long {
 	CGRectMinXEdge = 0,
 	CGRectMinYEdge = 1,
 	CGRectMaxXEdge = 2,
