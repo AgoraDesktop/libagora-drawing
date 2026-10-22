@@ -65,3 +65,13 @@ target_link_libraries(pdf_cff PRIVATE Drawing CoreFoundation::CoreFoundation)
 add_test(NAME pdf-cff COMMAND pdf_cff)
 set_tests_properties(pdf-cff PROPERTIES SKIP_RETURN_CODE 77 ENVIRONMENT
   "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")
+
+# **EPS, READ BACK BY GHOSTSCRIPT.** The EPS writer is proved by another PostScript implementation, not by its
+# own text: draw a rectangle, a stroke, text outlines, an image and a gradient, close the file, let `gs` render it
+# to a PPM and read the pixels. The case SKIPS with 77 when the host has no `gs`.
+add_executable(eps_write eps_write.c)
+target_link_libraries(eps_write PRIVATE Drawing CoreFoundation::CoreFoundation)
+
+add_test(NAME eps-write COMMAND eps_write)
+set_tests_properties(eps-write PROPERTIES SKIP_RETURN_CODE 77 ENVIRONMENT
+  "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")

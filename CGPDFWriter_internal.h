@@ -73,6 +73,10 @@ enum {
 
 struct cg_pdf_writer *cg_pdf_writer_create(CGDataConsumerRef consumer, const CGRect *mediaBox,
 					   CFDictionaryRef auxiliaryInfo);
+/* THE SAME RECORDER, WRITING ENCAPSULATED POSTSCRIPT. The context seam is shared; the serialiser is the
+ * `cg_eps_writer_*` family in CGEPSWriter.c. */
+struct cg_pdf_writer *cg_pdf_writer_create_eps(CGDataConsumerRef consumer, const CGRect *bounds,
+					       CFDictionaryRef auxiliaryInfo);
 void cg_pdf_writer_free(struct cg_pdf_writer *writer);
 
 bool cg_pdf_writer_begin_page(struct cg_pdf_writer *writer, const CGRect *mediaBox);

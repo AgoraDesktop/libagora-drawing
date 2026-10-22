@@ -27,6 +27,7 @@
  */
 #include <CoreGraphics/CGPDFContext.h>
 #include <CoreGraphics/CGPDFWriter_internal.h>
+#include <CoreGraphics/CGEPSWriter.h>
 #include <CoreGraphics/CGColorSpace.h>
 #include <CoreGraphics/CGImage_internal.h>
 #include <CoreGraphics/CGFont_internal.h>
@@ -249,6 +250,8 @@ struct cg_pdf_writer {
 	struct cg_pdf_font_resource *fonts;
 	size_t font_count;
 	size_t font_cap;
+	/* NON-NULL FOR AN EPS WRITER: the same context seam, a different serialiser. */
+	struct cg_eps_writer *eps;
 	unsigned next_image;
 	bool warned_no_embed;
 	bool warned_shadow_unsupported;
@@ -404,8 +407,27 @@ struct cg_pdf_writer *cg_pdf_writer_create(CGDataConsumerRef consumer, const CGR
 	return w;
 }
 
+struct cg_pdf_writer *cg_pdf_writer_create_eps(CGDataConsumerRef consumer, const CGRect *bounds,
+					       CFDictionaryRef auxiliaryInfo)
+{
+	struct cg_pdf_writer *w = cg_pdf_writer_create(consumer, bounds, auxiliaryInfo);
+
+	if (w == NULL) {
+		return NULL;
+	}
+	w->eps = cg_eps_writer_create(consumer, bounds, auxiliaryInfo);
+	if (w->eps == NULL) {
+		cg_pdf_writer_free(w);
+		return NULL;
+	}
+	return w;
+}
+
 size_t cg_pdf_writer_page_count(struct cg_pdf_writer *w)
 {
+	if (w != NULL && w->eps != NULL) {
+		return cg_eps_writer_page_count(w->eps);
+	}
 	return w != NULL ? w->page_count : 0;
 }
 
@@ -418,6 +440,9 @@ static void fn_reset_page_resources(struct cg_pdf_writer *w)
 
 bool cg_pdf_writer_begin_page(struct cg_pdf_writer *w, const CGRect *mediaBox)
 {
+	if (w != NULL && w->eps != NULL) {
+		return cg_eps_writer_begin_page(w->eps, mediaBox);
+	}
 	if (w == NULL || w->closed) {
 		return false;
 	}
@@ -440,6 +465,10 @@ bool cg_pdf_writer_begin_page(struct cg_pdf_writer *w, const CGRect *mediaBox)
 
 void cg_pdf_writer_set_page_box(struct cg_pdf_writer *w, int which, CGRect box)
 {
+	if (w != NULL && w->eps != NULL) {
+		cg_eps_writer_set_page_box(w->eps, which, box);
+		return;
+	}
 	if (w == NULL || which < 0 || which > 4 || box.size.width <= 0 || box.size.height <= 0) {
 		return;
 	}
@@ -538,6 +567,10 @@ void cg_pdf_writer_end_page(struct cg_pdf_writer *w)
 	unsigned page_num;
 	cg_buf resources = { 0 };
 
+	if (w != NULL && w->eps != NULL) {
+		cg_eps_writer_end_page(w->eps);
+		return;
+	}
 	if (w == NULL || !w->page_open) {
 		return;
 	}
@@ -607,6 +640,10 @@ void cg_pdf_writer_end_page(struct cg_pdf_writer *w)
 
 void cg_pdf_writer_set_metadata(struct cg_pdf_writer *w, CFDataRef metadata)
 {
+	if (w != NULL && w->eps != NULL) {
+		cg_eps_writer_set_metadata(w->eps, metadata);
+		return;
+	}
 	if (w == NULL) {
 		return;
 	}
@@ -627,6 +664,10 @@ static void fn_warn_shadow_unsupported(struct cg_pdf_writer *w, const cg_pdf_pai
 
 void cg_pdf_writer_refuse(struct cg_pdf_writer *w, const char *what)
 {
+	if (w != NULL && w->eps != NULL) {
+		cg_eps_writer_refuse(what);
+		return;
+	}
 	(void)w;
 	fprintf(stderr, "CG-REFUSE: CGPDFContext does not record %s; the page will lack it\n", what);
 }
@@ -637,6 +678,10 @@ void cg_pdf_writer_refuse(struct cg_pdf_writer *w, const char *what)
 
 void cg_pdf_writer_save(struct cg_pdf_writer *w)
 {
+	if (w != NULL && w->eps != NULL) {
+		cg_eps_writer_save(w->eps);
+		return;
+	}
 	if (w != NULL && w->page_open) {
 		fn_content_printf(w, "q\n");
 	}
@@ -644,6 +689,10 @@ void cg_pdf_writer_save(struct cg_pdf_writer *w)
 
 void cg_pdf_writer_restore(struct cg_pdf_writer *w)
 {
+	if (w != NULL && w->eps != NULL) {
+		cg_eps_writer_restore(w->eps);
+		return;
+	}
 	if (w != NULL && w->page_open) {
 		fn_content_printf(w, "Q\n");
 	}
@@ -651,6 +700,10 @@ void cg_pdf_writer_restore(struct cg_pdf_writer *w)
 
 void cg_pdf_writer_ctm(struct cg_pdf_writer *w, CGAffineTransform t)
 {
+	if (w != NULL && w->eps != NULL) {
+		cg_eps_writer_ctm(w->eps, t);
+		return;
+	}
 	if (w == NULL || !w->page_open) {
 		return;
 	}
@@ -962,6 +1015,10 @@ void cg_pdf_writer_paint_path(struct cg_pdf_writer *w, CGPathRef path, int opera
 	bool stroke = operation == CG_PDF_PAINT_STROKE || operation == CG_PDF_PAINT_FILLSTROKE ||
 		      operation == CG_PDF_PAINT_EOFILLSTROKE;
 
+	if (w != NULL && w->eps != NULL) {
+		cg_eps_writer_paint_path(w->eps, path, operation, paint);
+		return;
+	}
 	if (w == NULL || paint == NULL || operation < 0 || operation > 4) {
 		return;
 	}
@@ -988,6 +1045,10 @@ void cg_pdf_writer_paint_path(struct cg_pdf_writer *w, CGPathRef path, int opera
 
 void cg_pdf_writer_clip_path(struct cg_pdf_writer *w, CGPathRef path, bool even_odd)
 {
+	if (w != NULL && w->eps != NULL) {
+		cg_eps_writer_clip_path(w->eps, path, even_odd);
+		return;
+	}
 	if (w == NULL || !w->page_open) {
 		return;
 	}
@@ -999,6 +1060,10 @@ void cg_pdf_writer_clip_path(struct cg_pdf_writer *w, CGPathRef path, bool even_
 
 void cg_pdf_writer_clip_rect(struct cg_pdf_writer *w, CGRect rect)
 {
+	if (w != NULL && w->eps != NULL) {
+		cg_eps_writer_clip_rect(w->eps, rect);
+		return;
+	}
 	if (w == NULL || !w->page_open) {
 		return;
 	}
@@ -1008,6 +1073,10 @@ void cg_pdf_writer_clip_rect(struct cg_pdf_writer *w, CGRect rect)
 
 void cg_pdf_writer_clear_rect(struct cg_pdf_writer *w, CGRect rect)
 {
+	if (w != NULL && w->eps != NULL) {
+		cg_eps_writer_clear_rect(w->eps, rect);
+		return;
+	}
 	if (w == NULL || !w->page_open) {
 		return;
 	}
@@ -1078,6 +1147,10 @@ void cg_pdf_writer_image(struct cg_pdf_writer *w, CGRect rect, CGImageRef image,
 	unsigned char *alpha_compressed = NULL;
 	size_t alpha_compressed_len = 0;
 
+	if (w != NULL && w->eps != NULL) {
+		cg_eps_writer_image(w->eps, rect, image, paint);
+		return;
+	}
 	if (w == NULL || image == NULL || paint == NULL) {
 		return;
 	}
@@ -1260,6 +1333,9 @@ bool cg_pdf_writer_begin_pattern(struct cg_pdf_writer *w, CGPatternRef pattern)
 	struct cg_pdf_content_frame *frame;
 	unsigned object;
 
+	if (w != NULL && w->eps != NULL) {
+		return cg_eps_writer_begin_pattern(w->eps, pattern);
+	}
 	if (w == NULL || pattern == NULL || !w->page_open) {
 		return false;
 	}
@@ -1298,6 +1374,10 @@ void cg_pdf_writer_end_pattern(struct cg_pdf_writer *w, CGPatternRef pattern)
 	cg_buf tile;
 	unsigned object;
 
+	if (w != NULL && w->eps != NULL) {
+		cg_eps_writer_end_pattern(w->eps, pattern);
+		return;
+	}
 	if (w == NULL || w->frame_count == 0 || pattern == NULL) {
 		return;
 	}
@@ -1342,6 +1422,9 @@ bool cg_pdf_writer_begin_group(struct cg_pdf_writer *w, CGRect bbox, CGFloat alp
 	struct cg_pdf_group_frame *frame;
 	unsigned object;
 
+	if (w != NULL && w->eps != NULL) {
+		return cg_eps_writer_begin_group(w->eps, bbox, alpha, blend);
+	}
 	if (w == NULL || !w->page_open) {
 		return false;
 	}
@@ -1375,6 +1458,9 @@ bool cg_pdf_writer_begin_group(struct cg_pdf_writer *w, CGRect bbox, CGFloat alp
 
 bool cg_pdf_writer_in_group(struct cg_pdf_writer *w)
 {
+	if (w != NULL && w->eps != NULL) {
+		return cg_eps_writer_in_group(w->eps);
+	}
 	return w != NULL && w->group_count > 0;
 }
 
@@ -1386,6 +1472,10 @@ void cg_pdf_writer_end_group(struct cg_pdf_writer *w)
 	CGRect bbox;
 	char name[24];
 
+	if (w != NULL && w->eps != NULL) {
+		cg_eps_writer_end_group(w->eps);
+		return;
+	}
 	if (w == NULL || w->group_count == 0) {
 		return;
 	}
@@ -1472,6 +1562,10 @@ bool cg_pdf_writer_gradient(struct cg_pdf_writer *w, CGGradientRef gradient, boo
 	char name[24];
 	cg_pdf_paint_state gs_paint;
 
+	if (w != NULL && w->eps != NULL) {
+		return cg_eps_writer_gradient(w->eps, gradient, radial, start0, radius0, start1, radius1,
+					      options, paint);
+	}
 	if (w == NULL || gradient == NULL || paint == NULL) {
 		return false;
 	}
@@ -1619,6 +1713,10 @@ bool cg_pdf_writer_shading(struct cg_pdf_writer *w, CGShadingRef shading, const 
 	cg_pdf_paint_state gs_paint;
 	cg_buf dict = { 0 };
 	size_t i;
+
+	if (w != NULL && w->eps != NULL) {
+		return cg_eps_writer_shading(w->eps, shading, paint);
+	}
 	size_t c;
 
 	if (w == NULL || shading == NULL || paint == NULL) {
@@ -1974,6 +2072,9 @@ bool cg_pdf_writer_text_glyph(struct cg_pdf_writer *w, CGFontRef font_ref, CGGly
 	double f;
 	unsigned cid;
 
+	if (w != NULL && w->eps != NULL) {
+		return cg_eps_writer_text_glyph(w->eps, font_ref, glyph, pen, font_size, text_matrix, mode, paint);
+	}
 	if (w == NULL || paint == NULL || !w->page_open || font_ref == NULL || font_size <= 0.0 ||
 	    (mode != 0 && mode != 1 && mode != 2)) {
 		return false;
@@ -2436,6 +2537,9 @@ bool cg_pdf_writer_close(struct cg_pdf_writer *w)
 	unsigned char id[16];
 	time_t now;
 
+	if (w != NULL && w->eps != NULL) {
+		return cg_eps_writer_close(w->eps);
+	}
 	if (w == NULL || w->closed) {
 		fprintf(stderr, "CG-REFUSE: CGPDFContextClose was called on a closed or missing context\n");
 		return false;
@@ -2576,6 +2680,10 @@ void cg_pdf_writer_free(struct cg_pdf_writer *w)
 
 	if (w == NULL) {
 		return;
+	}
+	if (w->eps != NULL) {
+		cg_eps_writer_free(w->eps);
+		w->eps = NULL;
 	}
 	for (i = 0; i < w->object_count; i++) {
 		fn_buf_free(&w->objects[i]);

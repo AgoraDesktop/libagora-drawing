@@ -185,10 +185,17 @@ been converted back to CF", with lcms2 "not installed on this machine").
   lacks them. **THE RENDERER COMPOSITES A TRANSPARENCY GROUP OFFSCREEN** at device resolution (bounded to 4096
   pixels a side) and draws the result with the alpha and blend in effect at `Do`, so a preview agrees with external
   viewers: a 50%-alpha group is (255,127,127) over white in both. A form without a `/Group` keeps the inline path.
+- **EPS IS PRODUCED, NOT INTERPRETED.** `CGEPSContext` — an Agora extension, because Apple publishes no Core
+  Graphics EPS context — records the same drawing calls as PostScript: paths, clips, dashes, flat colours, glyph
+  outlines, opaque images, and gradients/shadings as Level 3 `shfill` with a stitching function. Alpha, blend modes,
+  transparency groups, soft-masked images, blurred shadows and tiling patterns refuse by name (`EPS-REFUSE`), and
+  text is outlines rather than an embedded font program. **THERE IS STILL NO POSTSCRIPT INTERPRETER**:
+  `CGPSConverter` (PostScript → PDF) and `NSEPSImageRep` remain absent, because either needs one; Ghostscript is a
+  test reader, not a dependency (the EPS test SKIPs with 77 when it is not installed).
 - **PDF encryption is reported, not decrypted.** `CGPDFDocumentIsEncrypted` answers true and the pages, catalog and
   info refuse by name; `IsUnlocked` is therefore false for an encrypted file and there is no password door.
-- **The scanner skips inline images rather than parsing them**, so the renderer does not draw them either, and
-  `CGPSConverter` (PostScript) does not exist. The RENDERER also refuses Type 3 fonts, named or vertical CMaps,
+- **The scanner skips inline images rather than parsing them**, so the renderer does not draw them either. The
+  RENDERER also refuses Type 3 fonts, named or vertical CMaps,
   patterns, soft masks and mesh shadings by name; DCT images are drawn, while JPX, JBIG2 and CCITT streams are
   named through `CGPDFDataFormat` and their bytes returned untouched.
 - **No umbrella `CoreGraphics.h`**, so Apple's usual `#include <CoreGraphics/CoreGraphics.h>` cannot be
