@@ -1,8 +1,10 @@
 /*
  * CGPath_internal — THE PATH OPERATIONS THAT ARE OURS NOW, and the reason they are not in CGPath.h.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THREE FUNCTIONS STOOD IN THE PUBLIC HEADER UNTIL 2026-10-05 AND ARE INTERNAL HERE, WHICH IS A
  * STATEMENT ABOUT THE ERA RATHER THAN ABOUT THE CODE. `CGPathCreateCopyByStrokingPath` and

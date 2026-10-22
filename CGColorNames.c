@@ -1,8 +1,10 @@
 /*
  * CGColorNames — the names `CGColorGetConstantColor` is asked for.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THESE ARE NAMES AND NOT COLOURS: in the 10.6 surface (which is the surface this library targets) they are
  * `CFStringRef` constants — Agora's Core Graphics depends on Core Foundation, so they are the CF type and not

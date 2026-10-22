@@ -1,8 +1,10 @@
 /*
  * CGPDFString.h — a PDF string: bytes on the page, and the two readings the API offers.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **A PDF STRING IS BYTES, NOT TEXT, AND `GetBytePtr` SAYS SO.** The literal and hexadecimal spellings are
  * just two ways to write the same sequence, and the parser has already taken out the escapes: `(Hello\)` and

@@ -1,8 +1,10 @@
 /*
  * CGDataProviderFoundation — the provider's CORE FOUNDATION-object forms.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * APPLE'S NAME SAYS `CFData` AND SO DOES THE ARGUMENT — Agora's Core Graphics depends on Core Foundation,
  * so the `…WithCFData` form takes the CFDataRef Apple's header names (PROVENANCE.md). In the Fiwix tree

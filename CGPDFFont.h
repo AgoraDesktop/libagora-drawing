@@ -1,8 +1,10 @@
 /*
  * CGPDFFont — a PDF font dictionary turned into what the drawing layer needs: a CGFont, glyphs and widths.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **THREE SPACES ARE COLLAPSED HERE, AND THAT IS THE WHOLE JOB.** A PDF byte is a CODE in the content stream; the
  * font dictionary says which GLYPH that code selects and how wide it is; the drawing layer draws a glyph by its

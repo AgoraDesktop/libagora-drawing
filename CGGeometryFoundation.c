@@ -1,8 +1,10 @@
 /*
  * CGGeometryFoundation — the geometric primitives as CORE FOUNDATION dictionaries.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * SIX DOORS AND ONE SHAPE: three `Create` forms that turn a struct into a dictionary and three `Make` forms
  * that turn it back, all six built on two helpers so that the keys and the ownership rule live in ONE place

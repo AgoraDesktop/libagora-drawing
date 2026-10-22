@@ -1,8 +1,10 @@
 /*
  * CGEPSWriter.c — recording a page as Encapsulated PostScript.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THE COMMON CASE IS EXACT. A path is the same sequence of `moveto`/`lineto`/`curveto`/`closepath` PostScript
  * has had since Level 1; a clip is `W n`; a dash is `setdash`; a flat colour is `setrgbcolor`; a glyph is its

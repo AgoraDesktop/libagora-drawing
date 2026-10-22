@@ -1,8 +1,10 @@
 /*
  * CGLayer — the offscreen surface, and the round trip that makes it worth having.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THE SURFACE IS A BITMAP CONTEXT, built by `CGBitmapContextCreate` with the one chart this library's contexts
  * accept. That is not a shortcut: a layer IS a bitmap context with a size attached, and reusing the existing

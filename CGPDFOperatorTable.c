@@ -1,8 +1,10 @@
 /*
  * CGPDFOperatorTable.c — the operator table, which is a name-to-callback list and nothing else.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THE WHOLE FILE IS A LINEAR SEARCH, and that is a measured choice rather than a shortcut: a content stream
  * names a few dozen distinct operators, the table is built once at startup, and a lookup happens once per

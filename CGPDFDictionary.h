@@ -1,8 +1,10 @@
 /*
  * CGPDFDictionary.h — the PDF's only keyed container, which is how every PDF structure is spelled.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * A KEY IS A NAME, so it is a C string here: `/MediaBox` is looked up as `"MediaBox"`, decoded, with `#xx`
  * escapes already removed. VALUES ARE RESOLVED, exactly as an array's elements are — a page's `/Contents` is

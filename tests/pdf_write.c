@@ -1,8 +1,10 @@
 /*
  * pdf_write.c — the PDF context's round trip: draw, close, reopen, render, compare the bytes.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **A WRITER IS ONLY PROVED BY ITS OWN READER.** The surface plan's gate for G2 is exactly this loop — create a
  * context, draw, close, reopen, count pages, read metadata, render a page into a bitmap and compare a pixel — and

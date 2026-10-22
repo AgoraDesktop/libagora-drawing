@@ -1,8 +1,10 @@
 /*
  * CGWindowLevel.h — the window levels, keyed the way Core Graphics keys them.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * WRITTEN FROM APPLE'S 10.6 HEADER, and the SHAPE is why this file exists at all: Apple does not publish the
  * NUMBERS, it publishes a KEY and a FUNCTION — `CGWindowLevelForKey` — so that "levels may be changed or

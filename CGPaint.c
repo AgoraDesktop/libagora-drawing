@@ -1,8 +1,10 @@
 /*
  * CGPaint — turning "what colour is this point?" into something pixman can composite.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * ONE LOOP. Every gradient, shading and pattern in this library is drawn by walking the pixels of a
  * device rectangle, mapping each one back into user space, and asking the paint what colour is

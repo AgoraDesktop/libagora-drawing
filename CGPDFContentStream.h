@@ -1,8 +1,10 @@
 /*
  * CGPDFContentStream.h — a page's drawing instructions as a run of streams, plus the resources they name.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **A CONTENT STREAM IS NOT ONE STREAM.** A page's `/Contents` may be a single stream or an ARRAY of them, and
  * the specification defines the sequence as if the parts were concatenated — which is how a writer that cannot

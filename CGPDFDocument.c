@@ -1,8 +1,10 @@
 /*
  * CGPDFDocument.c — opening the file: the header, the cross-reference, the trailer and the page tree.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **A PDF IS READ BACKWARDS, WHICH IS THE ONE STRUCTURAL FACT THAT MAKES IT A PDF.** The last thing in the file
  * is `startxref`, a byte offset to the newest cross-reference section; that section names every object's offset

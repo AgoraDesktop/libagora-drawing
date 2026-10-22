@@ -1,8 +1,10 @@
 /*
  * CGImagePNG — a PNG becomes a CGImage.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THE DECODER IS LIBPNG (1.6.x, zlib-style licence) AND THIS FILE IS ONLY THE SEAM, because the
  * tree ALREADY CARRIES IT: `third_party/x11/libpng` is vendored and built into `.build/x11-prefix`

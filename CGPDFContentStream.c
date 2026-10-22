@@ -1,8 +1,10 @@
 /*
  * CGPDFContentStream.c — collecting the parts of a page's content, and resolving the names they use.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THE TWO THINGS THIS FILE DOES ARE BOTH PLUMBING AND BOTH LOAD-BEARING. First, `/Contents` is normalised: a
  * single stream and an array of streams answer the same list, and a non-stream in that array is skipped rather

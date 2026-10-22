@@ -1,8 +1,10 @@
 /*
  * CGPDFPage.c — a page's effective geometry, and the transform that fits it onto a surface.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THE PAGE STORES NOTHING BUT WHERE IT IS. Its boxes and rotation were flattened from the page tree when the
  * document opened (`fn_walk_pages`); this file is the public face of those fields plus the one piece of real

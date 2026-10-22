@@ -1,8 +1,10 @@
 /*
  * CGDataConsumer — the sink, and the one callback that defines it.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THIS FILE IS SMALL BECAUSE THE CONTRACT IS: a consumer holds an `info` pointer and a `putBytes`, and every
  * byte that goes anywhere goes through that one function. THE FOUNDATION-OBJECT FORMS ARE NOT HERE — they are

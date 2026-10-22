@@ -1,8 +1,10 @@
 /*
  * CGImage — the value, and the one format it accepts.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  */
 #include <CoreGraphics/CGImage.h>
 #include <CoreGraphics/CGDataProvider_internal.h>

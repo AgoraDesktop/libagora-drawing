@@ -1,8 +1,10 @@
 /*
  * CGGPosKern.c — the pair adjustments a modern font keeps in GPOS.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **WHY THIS EXISTS: THE `kern` TABLE IS OBSOLETE AND THE FONTS PEOPLE USE ARE NOT.** A font's opinion that an `o`
  * belongs closer under a `T` than their advances put it used to live in a `kern` table, and FreeType reads that one

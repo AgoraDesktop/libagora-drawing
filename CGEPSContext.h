@@ -1,8 +1,10 @@
 /*
  * CGEPSContext.h — a drawing context whose output is an Encapsulated PostScript file.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **THIS IS AGORA'S EPS PRODUCER, AND IT IS AN EXTENSION RATHER THAN AN APPLE DOOR.** Apple produces EPS
  * through AppKit (`-dataWithEPSInsideRect:`) and converts PostScript to PDF with `CGPSConverter`; it publishes

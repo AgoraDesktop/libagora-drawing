@@ -1,8 +1,10 @@
 /*
  * eps_write.c — the EPS context's own round trip: draw, close, let Ghostscript interpret it, read the pixels.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **THE READER IS GHOSTSCRIPT, BECAUSE THIS TREE HAS NO POSTSCRIPT INTERPRETER.** A writer cannot prove itself
  * by parsing its own text; the only honest check is another implementation reading the file and putting ink

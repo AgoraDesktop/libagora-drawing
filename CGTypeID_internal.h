@@ -1,8 +1,10 @@
 /*
  * CGTypeID_internal — the table of type identities, and why the values are ours.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * ONE REGISTRY, ONE FILE, FIXED NUMBERS. Every `CG*GetTypeID` door in this library answers from the table
  * below, so the two properties the API exists for hold by construction rather than by luck: THE SAME CLASS

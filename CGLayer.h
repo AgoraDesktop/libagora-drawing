@@ -1,8 +1,10 @@
 /*
  * CGLayer — a surface you draw into and then draw somewhere else.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * A LAYER IS AN OFFSCREEN SURFACE WITH A SIZE: `CGLayerGetContext` hands back a context whose drawing goes into
  * the layer, and `CGContextDrawLayerInRect` puts the layer's contents into another context's user space. THAT

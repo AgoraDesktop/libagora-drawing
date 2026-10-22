@@ -1,8 +1,10 @@
 /*
  * CGDataConsumerFoundation — the two convenience sinks, where the object is the `info` pointer.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * BOTH ARE THE CALLBACK FORM WITH A CORE FOUNDATION OBJECT BEHIND IT, which is the design: the mutable
  * data one appends, the file one writes, and neither adds anything to the contract `CGDataConsumer.h`

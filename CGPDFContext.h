@@ -1,8 +1,10 @@
 /*
  * CGPDFContext.h — a drawing context whose output is a PDF file.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **THIS IS THE WRITER THE READER'S OTHER HALF NEEDED**: `NSView -dataWithPDFInsideRect:`, print-to-PDF and every
  * "export" dialog stand on it. A caller draws into the context exactly as it draws into a bitmap; each page is a

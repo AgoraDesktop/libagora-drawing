@@ -1,8 +1,10 @@
 /*
  * pdf.c — the PDF reader's suite: two files, built byte by byte, and every door that answers about them.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **THE FIXTURES ARE BUILT HERE RATHER THAN CHECKED IN**, which is the only way the test can assert the
  * cross-reference offsets it is testing against: a checked-in PDF would be a black box whose `/Prev` chain the

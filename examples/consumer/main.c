@@ -1,4 +1,11 @@
 /*
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
+ */
+
+/*
  * A client of libagora-drawing. It links AgoraDrawing::Drawing AND NOTHING ELSE.
  *
  * TWO FAILURES WOULD SHOW HERE RATHER THAN IN A TEST. IF CORE FOUNDATION'S HEADERS WERE NOT REACHABLE

@@ -1,8 +1,10 @@
 /*
  * CGDataConsumer — the other direction: bytes going somewhere, and who takes them.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * A PROVIDER IS A SOURCE AND A CONSUMER IS A SINK, and the sink's whole interface is ONE CALLBACK: `putBytes`
  * takes `count` bytes from `buffer` and returns HOW MANY IT TOOK — fewer than it was given, or zero, means

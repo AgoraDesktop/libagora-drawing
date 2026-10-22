@@ -1,8 +1,10 @@
 /*
  * CGPDFFunction.c — sampled, exponential and stitched functions, and the refusal of the programmable one.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THE SAMPLED TABLE IS THE ONLY ONE WITH REAL ARITHMETIC, and it is worth stating what "sample" means: /Size
  * gives the count along each axis, /BitsPerSample the width of each sample, and the samples are packed

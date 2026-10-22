@@ -1,8 +1,10 @@
 /*
  * CGPDFObject.h — one value out of a PDF file, and the question every caller asks it: what are you?
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **A PDF OBJECT IS BORROWED, NOT RETAINED.** There is no `CGPDFObjectRetain` in Apple's header and there is
  * none here: an object belongs to the document that parsed it and lives exactly as long as that document. The

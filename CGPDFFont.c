@@ -1,8 +1,10 @@
 /*
  * CGPDFFont.c — encodings, widths and embedded programs.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THE ENCODING IS TWO TABLES AND AN OVERRIDE, WHICH IS THE SPECIFICATION'S OWN SHAPE: a base encoding turns a
  * code into a character (or a glyph name), and /Differences replaces individual codes with names. An embedded

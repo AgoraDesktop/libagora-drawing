@@ -1,8 +1,10 @@
 /*
  * CGPDFPage.h — one page: its boxes, its rotation, and the transform that fits it into a rectangle.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **THE PAGE FLATTENS INHERITANCE, WHICH IS THE ONLY REASON THIS TYPE EXISTS APART FROM THE DOCUMENT.** In the
  * file `/MediaBox`, `/CropBox` and `/Rotate` may live on any ancestor in the page tree; `CGPDFPageGetBoxRect`

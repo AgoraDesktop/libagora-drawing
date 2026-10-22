@@ -1,8 +1,10 @@
 /*
  * CGPDFObject.c — the lexer, the parser, the object model and the type door.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **A PDF IS NOT A SERIALISATION FORMAT WITH A SCHEMA; IT IS A SMALL POSTSCRIPT WITH A DIRECTORY.** So this
  * file is a tokeniser and a recursive-descent parser, and the whole grammar fits below: seven delimiters, four

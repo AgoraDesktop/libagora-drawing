@@ -1,8 +1,10 @@
 /*
  * CGImageDestination.h — writing an image out: the door that turns a `CGImage` into bytes of a named type.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **THIS IS THE HALF OF CORE GRAPHICS'S IMAGE STORY THIS TREE DID NOT HAVE, AND THE ONE THE APPKIT NAMED.** Every
  * encoding door in `NSBitmapImageRep` refused with a measured reason — "this tree's CoreGraphics has the PNG and JPEG

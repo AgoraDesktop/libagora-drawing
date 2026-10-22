@@ -1,8 +1,10 @@
 /*
  * CGDataProvider — a block of bytes, with a lifetime.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * WHY THIS EXISTS AT ALL, AND WHY IT IS THE DOOR: Apple's `CGColorSpaceCreateICCBased` takes a
  * `CGDataProviderRef` for the profile, and a data provider is a CORE GRAPHICS type — not a Core

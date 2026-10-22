@@ -1,8 +1,10 @@
 /*
  * CGWindowLevel.c — the one function behind the level names.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **THE NUMBERS ARE OURS AND THEY ARE CHOSEN TO AGREE WITH `NSWindow.h`, WHICH ALREADY WROTE ITS OWN DOWN.**
  * Apple publishes the key and the function and no values, so this is the tree's own set: the SAME set

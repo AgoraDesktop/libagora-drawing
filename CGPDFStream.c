@@ -1,8 +1,10 @@
 /*
  * CGPDFStream.c — the filters, and the one door that gets a stream's bytes out.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **A FILTER CHAIN IS APPLIED IN THE ORDER THE DICTIONARY LISTS IT.** `/Filter [/FlateDecode /ASCIIHexDecode]`
  * means the file holds hex, and underneath it zlib, and underneath that the data; decoding walks the array from

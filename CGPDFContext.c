@@ -1,8 +1,10 @@
 /*
  * CGPDFContext.c — the door a caller holds: create a PDF context, begin and end pages, close it.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THE PUBLIC HALF IS DELIBERATELY THIN. It owns the page-info dictionary's vocabulary (the box keys are
  * `CFData`-wrapped `CGRect`s, the text fields are `CFString`s), it turns a URL into a consumer, and it is the

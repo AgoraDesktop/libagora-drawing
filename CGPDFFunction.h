@@ -1,8 +1,10 @@
 /*
  * CGPDFFunction — the sampled and exponential functions PDF uses for shadings and tint transforms.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * **A PDF FUNCTION IS A MAPPING FROM m NUMBERS TO n NUMBERS**, and the format has four types. Three are data —
  * type 0 samples a table, type 2 is `C0 + x^N (C1 - C0)`, type 3 stitches other functions across /Bounds — and

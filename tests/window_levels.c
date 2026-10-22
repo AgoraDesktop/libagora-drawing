@@ -1,7 +1,10 @@
 /*
  * window_levels — F4's measurement: the Core Graphics window-level vocabulary.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed. SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * WHAT THIS HOLDS UP, in WORKSPACE-PLAN.md's words for F4: `kCGDesktopWindowLevel` is BELOW every window, and
  * the vocabulary is ORDERED — the thing a compositor and a caller both rely on and neither can derive. It also

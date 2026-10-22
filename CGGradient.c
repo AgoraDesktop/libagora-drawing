@@ -1,8 +1,10 @@
 /*
  * CGGradient — the ramp, and the three geometries it is asked about.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THE OBJECT HERE HOLDS ONE THING: A TABLE OF STOPS, each a location and a colour that has already
  * been converted into device RGB. Geometry is not stored, because a gradient has none — the same

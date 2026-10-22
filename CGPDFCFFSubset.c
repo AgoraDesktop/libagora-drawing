@@ -1,8 +1,10 @@
 /*
  * CGPDFCFFSubset.c — the non-CID CFF subsetter.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THE FORMAT IS A SET OF INDEXES AND OFFSETS, and the only arithmetic that must be exactly right is where
  * each rebuilt piece lands: Top DICT offsets are absolute from the start of the CFF data, while the Private

@@ -1,8 +1,10 @@
 /*
  * CGPDFArray.c — the array's doors, which are the array plus the resolver.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * EVERY DOOR HERE RESOLVES ITS ELEMENT FIRST. A `/Kids` array in a real file holds `3 0 R`, not a dictionary;
  * so `CGPDFArrayGetDictionary` is the object alone only when the file wrote it inline, which is rare. The

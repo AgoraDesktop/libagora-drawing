@@ -1,8 +1,10 @@
 /*
  * CGFont — the FreeType face, and the answers Apple's font API asks of it.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * THE ENGINE IS FREETYPE AND IT IS BEHIND A SEAM (CGFont_internal.h), so nothing outside this
  * file includes `<ft2build.h>`. The engine choice is the one the plan's §5 states for every

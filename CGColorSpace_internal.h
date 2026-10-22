@@ -1,8 +1,10 @@
 /*
  * CGColorSpace_internal.h — the seam between the colour space and the colour.
  *
- * Copyright © 2026 Kyle J. Cardoza. MIT licensed — see LICENSE.
- * SPDX-License-Identifier: MIT
+ * Copyright © 2026 Kyle J. Cardoza.
+ * SPDX-FileCopyrightText: 2026 Kyle J. Cardoza
+ * SPDX-License-Identifier: LGPL-3.0-or-later
+ * Portions of this file may derive from GNUstep; see THIRD-PARTY.md.
  *
  * NOT INSTALLED, NOT INCLUDED BY ANY PUBLIC HEADER, and named the way libconfig_internal.h is
  * for the same reason: one translation unit knows how a colour space is built, and one other
