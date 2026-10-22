@@ -182,6 +182,9 @@ struct CGContext {
 	 * rasterized. A PDF context still has a 1x1 pixman surface so the dozen doors that ask `c->data` keep
 	 * their ordinary shape; every painting door checks this pointer before touching it. */
 	struct cg_pdf_writer *writer;
+	/* THE TRANSPARENCY GROUPS THIS CONTEXT HAS OPENED IN WRITER MODE, so `End` restores only what `Begin`
+	 * pushed even when a group was refused for depth. */
+	int writer_groups;
 	/* THE CALLER'S RELEASE CALLBACK AND ITS info FIELD, or NULL. Apple's header says the callback is
 	 * called when the context is freed, with releaseInfo and data as arguments -- and THE DATA IS STILL
 	 * THE CONTEXT'S TO FREE IF IT ALLOCATED IT, because the callback and the free are two promises. */
@@ -935,7 +938,16 @@ static void cg_group_begin(CGContextRef c, CFDictionaryRef auxiliaryInfo)
 void CGContextBeginTransparencyLayer(CGContextRef c, CFDictionaryRef auxiliaryInfo)
 {
 	if (c != NULL && c->writer != NULL) {
-		cg_pdf_writer_refuse(c->writer, "transparency layers");
+		/* THE WRITER'S SURFACE IS 1x1, so the context's clip bounding box says nothing about the page; the
+		 * writer substitutes its page box for an empty bound. */
+		if (cg_pdf_writer_begin_group(c->writer, CGRectZero, c->state.alpha, c->state.blend)) {
+			c->writer_groups++;
+			CGContextSaveGState(c);
+			/* THE GROUP COMPOSITES WITH THE ALPHA AND BLEND IN EFFECT AT BEGIN; its own drawing starts
+			 * opaque and normal, so the group's alpha is applied once, not per operation. */
+			c->state.alpha = 1.0;
+			c->state.blend = kCGBlendModeNormal;
+		}
 		return;
 	}
 	cg_group_begin(c, auxiliaryInfo);
@@ -951,7 +963,13 @@ void CGContextBeginTransparencyLayerWithRect(CGContextRef c, CGRect rect, CFDict
 		return;
 	}
 	if (c->writer != NULL) {
-		cg_pdf_writer_refuse(c->writer, "transparency layers");
+		if (cg_pdf_writer_begin_group(c->writer, rect, c->state.alpha, c->state.blend)) {
+			c->writer_groups++;
+			CGContextSaveGState(c);
+			c->state.alpha = 1.0;
+			c->state.blend = kCGBlendModeNormal;
+			CGContextClipToRect(c, rect);
+		}
 		return;
 	}
 	cg_group_begin(c, auxiliaryInfo);
@@ -966,9 +984,11 @@ void CGContextEndTransparencyLayer(CGContextRef c)
 		return;
 	}
 	if (c->writer != NULL) {
-		/* THE BEGIN WAS REFUSED TOO, so there is no group to pop and nothing the caller can do but
-		 * continue; saying so once is the honest answer. */
-		cg_pdf_writer_refuse(c->writer, "transparency layers");
+		if (c->writer_groups > 0) {
+			c->writer_groups--;
+			CGContextRestoreGState(c);
+			cg_pdf_writer_end_group(c->writer);
+		}
 		return;
 	}
 	if (c->groups == NULL) {

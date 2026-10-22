@@ -150,6 +150,14 @@ struct cg_pdf_content_frame {
 	CGPatternRef pattern;
 };
 
+struct cg_pdf_group_frame {
+	cg_buf content;
+	unsigned object;
+	CGFloat alpha;
+	CGBlendMode blend;
+	CGRect bbox;
+};
+
 struct cg_pdf_gstate {
 	int ca;			/* thousandths */
 	int CA;
@@ -231,6 +239,9 @@ struct cg_pdf_writer {
 	struct cg_pdf_content_frame *frames;
 	size_t frame_count;
 	size_t frame_cap;
+	struct cg_pdf_group_frame *groups;
+	size_t group_count;
+	size_t group_cap;
 	struct cg_pdf_gstate *gstates;
 	size_t gstate_count;
 	size_t gstate_cap;
@@ -1318,6 +1329,103 @@ void cg_pdf_writer_end_pattern(struct cg_pdf_writer *w, CGPatternRef pattern)
 		entry->pattern = CGPatternRetain(pattern);
 		entry->object = object;
 		snprintf(entry->name, sizeof entry->name, "P%u", object);
+	}
+}
+
+/* ------------------------------------------------------------------------- */
+/* transparency layers, as isolated transparency groups                      */
+/* ------------------------------------------------------------------------- */
+
+bool cg_pdf_writer_begin_group(struct cg_pdf_writer *w, CGRect bbox, CGFloat alpha, CGBlendMode blend)
+{
+	struct cg_pdf_group_frame *frame;
+	unsigned object;
+
+	if (w == NULL || !w->page_open) {
+		return false;
+	}
+	if (w->group_count >= 8) {
+		cg_pdf_writer_refuse(w, "a transparency layer nested more than 8 deep");
+		return false;
+	}
+	if (w->group_count == w->group_cap) {
+		size_t cap = w->group_cap ? w->group_cap * 2 : 4;
+		struct cg_pdf_group_frame *grown = realloc(w->groups, cap * sizeof *grown);
+
+		if (grown == NULL) {
+			return false;
+		}
+		w->groups = grown;
+		w->group_cap = cap;
+	}
+	object = fn_new_object(w);
+	if (object == 0) {
+		return false;
+	}
+	frame = &w->groups[w->group_count++];
+	frame->content = w->content;
+	memset(&w->content, 0, sizeof w->content);
+	frame->object = object;
+	frame->alpha = alpha;
+	frame->blend = blend;
+	frame->bbox = bbox;
+	return true;
+}
+
+bool cg_pdf_writer_in_group(struct cg_pdf_writer *w)
+{
+	return w != NULL && w->group_count > 0;
+}
+
+void cg_pdf_writer_end_group(struct cg_pdf_writer *w)
+{
+	struct cg_pdf_group_frame *frame;
+	cg_buf tile;
+	cg_buf resources = { 0 };
+	CGRect bbox;
+	char name[24];
+
+	if (w == NULL || w->group_count == 0) {
+		return;
+	}
+	frame = &w->groups[w->group_count - 1];
+	tile = w->content;
+	w->content = frame->content;
+	w->group_count--;
+
+	bbox = frame->bbox;
+	if (bbox.size.width <= 0 || bbox.size.height <= 0) {
+		bbox = w->page_media;
+	}
+	/* THE GROUP'S RESOURCES ARE BUILT BEFORE THE GROUP IS ADDED TO THE PAGE'S XOBJECTS, so a group does not list
+	 * itself. Everything its content used is already in the page's lists. */
+	fn_build_resources(w, &resources);
+	fn_object_printf(w, frame->object,
+			 "<< /Type /XObject /Subtype /Form /BBox [%.4f %.4f %.4f %.4f] "
+			 "/Group << /S /Transparency /CS /DeviceRGB /I true >> /Resources << %s >> /Length %zu >>\nstream\n",
+			 (double)bbox.origin.x, (double)bbox.origin.y,
+			 (double)(bbox.origin.x + bbox.size.width),
+			 (double)(bbox.origin.y + bbox.size.height),
+			 resources.data != NULL ? (const char *)resources.data : "", tile.len);
+	fn_buf_put(&w->objects[frame->object - 1], tile.data, tile.len);
+	fn_buf_put(&w->objects[frame->object - 1], "\nendstream", 10);
+	fn_buf_free(&resources);
+	fn_buf_free(&tile);
+
+	snprintf(name, sizeof name, "Fm%u", frame->object);
+	fn_resource_add(&w->images, &w->image_count, &w->image_cap, name, frame->object);
+
+	{
+		cg_pdf_paint_state paint;
+
+		memset(&paint, 0, sizeof paint);
+		paint.alpha = frame->alpha;
+		paint.blend = frame->blend;
+		paint.fill[3] = 1.0;
+		paint.stroke[3] = 1.0;
+		fn_content_printf(w, "q\n");
+		fn_emit_gstate(w, &paint, true, false);
+		fn_content_printf(w, "/%s Do\nQ\n", name);
 	}
 }
 
@@ -2445,6 +2553,14 @@ void cg_pdf_writer_free(struct cg_pdf_writer *w)
 			fn_buf_free(&w->frames[fr].content);
 		}
 		free(w->frames);
+	}
+	{
+		size_t gr;
+
+		for (gr = 0; gr < w->group_count; gr++) {
+			fn_buf_free(&w->groups[gr].content);
+		}
+		free(w->groups);
 	}
 	free(w->gstates);
 	{

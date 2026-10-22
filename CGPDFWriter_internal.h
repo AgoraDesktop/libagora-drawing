@@ -18,9 +18,9 @@
  * WHAT IS RECORDED: `q`/`Q`, `cm`, path construction and painting, clips, images (with an /SMask when the image
  * has alpha), gradients (as axial/radial shadings with a stitching function), and text as real text or glyph
  * outlines; colored tiling patterns run the caller's draw callback into a pattern content stream; a zero-blur shadow
- * is a hard silhouette behind paths and text. WHAT IS REFUSED BY NAME: per-stop-alpha gradients, shadings outside
- * DeviceGray/RGB/CMYK, uncolored patterns, BLURRED shadows (and shadows on images or shadings), transparency
- * layers and clip-to-mask. Text is vector and correct but not selectable — embedding a font program
+ * is a hard silhouette behind paths and text; a transparency layer is an isolated group. WHAT IS REFUSED BY NAME:
+ * per-stop-alpha gradients, shadings outside DeviceGray/RGB/CMYK, uncolored patterns, BLURRED shadows (and shadows
+ * on images or shadings), and clip-to-mask. Text is vector and correct but not selectable — embedding a font program
  * is a later landing, and calling an outline a glyph would be the sort of lie this tree refuses.
  */
 #ifndef CORE_GRAPHICS_CGPDFWRITER_INTERNAL_H
@@ -123,6 +123,14 @@ bool cg_pdf_writer_shading(struct cg_pdf_writer *writer, CGShadingRef shading, c
  * already a resource and the callback need not run. */
 bool cg_pdf_writer_begin_pattern(struct cg_pdf_writer *writer, CGPatternRef pattern);
 void cg_pdf_writer_end_pattern(struct cg_pdf_writer *writer, CGPatternRef pattern);
+
+/* **A TRANSPARENCY LAYER: AN ISOLATED TRANSPARENCY GROUP.** The content recorded between begin and end becomes a
+ * Form XObject with `/Group /S /Transparency /I true`, drawn at `end` with the alpha and blend in effect at
+ * `begin`. `bbox` is the layer's bound in the current user space (the clip); a group nested more than 8 deep is
+ * refused. */
+bool cg_pdf_writer_begin_group(struct cg_pdf_writer *writer, CGRect bbox, CGFloat alpha, CGBlendMode blend);
+bool cg_pdf_writer_in_group(struct cg_pdf_writer *writer);
+void cg_pdf_writer_end_group(struct cg_pdf_writer *writer);
 
 /* **A GLYPH AS TEXT, WHEN THE FACE CAN BE EMBEDDED.** True for a font this writer embedded (a TrueType/`glyf`
  * program as a Type0/CIDFontType2 font, Identity-H) and false otherwise — a CFF or Type 1 face, or a face with

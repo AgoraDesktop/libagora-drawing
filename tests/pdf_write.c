@@ -287,6 +287,11 @@ static CFDataRef fn_build_pdf(void)
 		CGContextSetShadowWithColor(ctx, CGSizeZero, 0, NULL);
 		CGColorRelease(black);
 	}
+	/* A TRANSPARENCY LAYER at alpha 1: an isolated transparency group, drawn at End. */
+	CGContextBeginTransparencyLayer(ctx, NULL);
+	CGContextSetRGBFillColor(ctx, 0.0, 0.0, 1.0, 1.0);
+	CGContextFillRect(ctx, CGRectMake(80, 60, 15, 10));
+	CGContextEndTransparencyLayer(ctx);
 	CGPDFContextEndPage(ctx);
 
 	/* PAGE TWO, with its own media box in the page-info dictionary. */
@@ -321,6 +326,45 @@ struct fn_font_probe {
 	int type0;
 	int embedded;
 };
+
+/* AN XOBJECT THAT IS A FORM WITH A /Group IS A TRANSPARENCY LAYER. */
+struct fn_form_probe {
+	int forms;
+	int groups;
+};
+
+static void fn_xobject_entry(const char *key, CGPDFObjectRef value, void *info)
+{
+	struct fn_form_probe *probe = info;
+	CGPDFDictionaryRef object = NULL;
+	CGPDFDictionaryRef group = NULL;
+	const char *subtype = NULL;
+	CGPDFStreamRef stream = NULL;
+
+	(void)key;
+	if (CGPDFObjectGetType(value) == kCGPDFObjectTypeStream &&
+	    CGPDFObjectGetValue(value, kCGPDFObjectTypeStream, &stream)) {
+		object = CGPDFStreamGetDictionary(stream);
+	} else if (CGPDFObjectGetType(value) == kCGPDFObjectTypeDictionary &&
+		   CGPDFObjectGetValue(value, kCGPDFObjectTypeDictionary, &object)) {
+		/* an image is a stream too, but a dictionary entry is accepted defensively */
+	} else {
+		return;
+	}
+	if (object == NULL) {
+		return;
+	}
+	if (CGPDFDictionaryGetName(object, "Subtype", &subtype) && strcmp(subtype, "Form") == 0) {
+		probe->forms++;
+		if (CGPDFDictionaryGetDictionary(object, "Group", &group)) {
+			const char *kind = NULL;
+
+			if (CGPDFDictionaryGetName(group, "S", &kind) && strcmp(kind, "Transparency") == 0) {
+				probe->groups++;
+			}
+		}
+	}
+}
 
 static void fn_font_entry(const char *key, CGPDFObjectRef value, void *info)
 {
@@ -392,6 +436,16 @@ static void fn_check_page_one(CGPDFDocumentRef document)
 			CHECK(CGPDFDictionaryGetDictionary(resources, "Pattern", &patterns) &&
 			      CGPDFDictionaryGetCount(patterns) >= 1,
 			      "the page carries no /Pattern resource for its tiling pattern");
+			{
+				CGPDFDictionaryRef xobjects = NULL;
+				struct fn_form_probe forms = { 0, 0 };
+
+				if (CGPDFDictionaryGetDictionary(resources, "XObject", &xobjects)) {
+					CGPDFDictionaryApply(xobjects, fn_xobject_entry, &forms);
+				}
+				CHECK(forms.forms >= 1, "the page carries no Form XObject for its transparency layer");
+				CHECK(forms.groups >= 1, "the Form XObject has no /Group /S /Transparency");
+			}
 		}
 	}
 	{
@@ -550,6 +604,12 @@ static void fn_check_page_one(CGPDFDocumentRef document)
 	      px[3]);
 	pixel_at(buffer, 200, 100, CGPointMake(59, 75), px);
 	CHECK(px[3] < 30, "the shadow was painted outside its offset silhouette (A=%u)", px[3]);
+
+	/* THE TRANSPARENCY GROUP'S CONTENT, drawn through the Form XObject's Do. */
+	pixel_at(buffer, 200, 100, CGPointMake(85, 65), px);
+	CHECK(px[3] > 200 && px[0] > 200 && px[1] < 60 && px[2] < 60,
+	      "the transparency group's rectangle is B=%u G=%u R=%u A=%u, expected opaque blue", px[0], px[1],
+	      px[2], px[3]);
 
 	pixel_at(buffer, 200, 100, CGPointMake(80, 20), px);
 	/* THE DESTINATION IS PREMULTIPLIED, so a 50% red over transparent is R=A=128, not R=255. */

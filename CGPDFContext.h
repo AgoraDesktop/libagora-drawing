@@ -25,8 +25,11 @@
  * selects it with `scn`/`SCN` (the CGPattern object this library creates is always colored and no-distortion).
  * **A SHADOW WITH ZERO BLUR IS RECORDED** for paths and text: the silhouette is offset, painted in the shadow colour
  * and put behind the content. A BLURRED shadow has no PDF primitive and is refused, as is a shadow on an image or a
- * shading (there is no path to silhouette). Transparency layers and clip-to-mask are REFUSED BY NAME (`CG-REFUSE`),
- * so a caller learns they were not recorded instead of receiving a page that quietly lacks them.
+ * shading (there is no path to silhouette). **A TRANSPARENCY LAYER IS AN ISOLATED TRANSPARENCY GROUP**: its content
+ * becomes a Form XObject with `/Group << /S /Transparency /I true >>`, drawn at `End` with the alpha and blend in
+ * effect at `Begin`, so that alpha is applied to the GROUP once rather than to each operation. Clip-to-mask is
+ * REFUSED BY NAME (`CG-REFUSE`), so a caller learns it was not recorded instead of receiving a page that quietly
+ * lacks it.
  *
  * THE AUXILIARY AND PAGE-INFO DICTIONARIES are Apple's: the keys below, a `CFStringRef` value for each textual
  * field, and a `CFDataRef` wrapping a `CGRect` for each box.

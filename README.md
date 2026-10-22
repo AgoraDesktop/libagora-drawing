@@ -175,8 +175,12 @@ been converted back to CF", with lcms2 "not installed on this machine").
   selects it with `/Pattern cs` and `scn` or `SCN`; this renderer draws one by rasterising the tile once and tiling
   it through a CGPattern. **A ZERO-BLUR SHADOW IS RECORDED** for paths and text: the silhouette is offset, painted
   in the shadow colour and put behind the content. A BLURRED shadow has no PDF primitive and is refused, as is a
-  shadow on an image or a shading. The PDF context still REFUSES BY NAME uncolored patterns, transparency layers
-  and clip-to-mask, so a caller knows when a page lacks them.
+  shadow on an image or a shading. **A TRANSPARENCY LAYER IS WRITTEN AS AN ISOLATED TRANSPARENCY GROUP**: its content
+  is a Form XObject with `/Group << /S /Transparency /I true >>`, drawn at End with the alpha and blend in effect at
+  Begin. The PDF context still REFUSES BY NAME uncolored patterns and clip-to-mask, so a caller knows when a page
+  lacks them. ONE RENDERER LIMITATION IS STATED: this library's PDF renderer draws a form's content INLINE rather
+  than compositing it offscreen, so a transparency group's alpha reaches each operation in a preview; external
+  viewers (verified with poppler: a 50%-alpha group is (255,127,127) over white) composite the group correctly.
 - **PDF encryption is reported, not decrypted.** `CGPDFDocumentIsEncrypted` answers true and the pages, catalog and
   info refuse by name; `IsUnlocked` is therefore false for an encrypted file and there is no password door.
 - **The scanner skips inline images rather than parsing them**, so the renderer does not draw them either, and
