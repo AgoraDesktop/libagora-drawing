@@ -178,8 +178,9 @@ typedef struct cg_state {
 struct CGContext {
 	int refcount;
 	int is_bitmap;
-	/* NON-NULL FOR A PDF CONTEXT: the recorder this context's drawing calls are said to instead of being
-	 * rasterized. A PDF context still has a 1x1 pixman surface so the dozen doors that ask `c->data` keep
+	/* NON-NULL FOR A RECORDING CONTEXT (PDF OR EPS): the recorder this context's drawing calls are said to
+	 * instead of being rasterized. A recording context still has a 1x1 pixman surface so the doors that ask
+	 * `c->data` keep
 	 * their ordinary shape; every painting door checks this pointer before touching it. */
 	struct cg_pdf_writer *writer;
 	/* THE TRANSPARENCY GROUPS THIS CONTEXT HAS OPENED IN WRITER MODE, so `End` restores only what `Begin`
@@ -5740,7 +5741,7 @@ static void cg_show_glyph_mode(CGContextRef c, CGGlyph glyph, CGPoint pen, pixma
 			return;
 		}
 		if (mode == kCGTextStrokeClip || mode == kCGTextFillStrokeClip) {
-			fprintf(stderr, "CG-REFUSE: text drawing mode %d is not recorded by the PDF context\n", mode);
+			fprintf(stderr, "CG-REFUSE: text drawing mode %d is not recorded by a page-description context\n", mode);
 			return;
 		}
 		fn_pdf_paint_state(c, &ps);
