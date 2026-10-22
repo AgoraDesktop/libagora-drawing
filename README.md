@@ -178,9 +178,9 @@ been converted back to CF", with lcms2 "not installed on this machine").
   shadow on an image or a shading. **A TRANSPARENCY LAYER IS WRITTEN AS AN ISOLATED TRANSPARENCY GROUP**: its content
   is a Form XObject with `/Group << /S /Transparency /I true >>`, drawn at End with the alpha and blend in effect at
   Begin. The PDF context still REFUSES BY NAME uncolored patterns and clip-to-mask, so a caller knows when a page
-  lacks them. ONE RENDERER LIMITATION IS STATED: this library's PDF renderer draws a form's content INLINE rather
-  than compositing it offscreen, so a transparency group's alpha reaches each operation in a preview; external
-  viewers (verified with poppler: a 50%-alpha group is (255,127,127) over white) composite the group correctly.
+  lacks them. **THE RENDERER COMPOSITES A TRANSPARENCY GROUP OFFSCREEN** at device resolution (bounded to 4096
+  pixels a side) and draws the result with the alpha and blend in effect at `Do`, so a preview agrees with external
+  viewers: a 50%-alpha group is (255,127,127) over white in both. A form without a `/Group` keeps the inline path.
 - **PDF encryption is reported, not decrypted.** `CGPDFDocumentIsEncrypted` answers true and the pages, catalog and
   info refuse by name; `IsUnlocked` is therefore false for an encrypted file and there is no password door.
 - **The scanner skips inline images rather than parsing them**, so the renderer does not draw them either, and

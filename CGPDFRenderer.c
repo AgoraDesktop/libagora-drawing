@@ -1575,6 +1575,127 @@ static void fn_draw_shading(fn_render *r, cg_pdf_obj *shading)
 
 static void fn_run_content(fn_render *r, cg_pdf_obj *stream, cg_pdf_obj *resources);
 
+/* **A TRANSPARENCY GROUP IS A DESTINATION OF ITS OWN.** The form's content is drawn into an offscreen bitmap (at
+ * device resolution, bounded by the form's /BBox and the current clip), and that bitmap is then drawn with the
+ * graphics state in effect at `Do` — so the group's alpha composites the GROUP once, not each operation inside it.
+ * A plain form keeps the inline path: it has no group semantics and the offscreen copy would only cost memory. */
+static bool fn_form_is_transparency_group(cg_pdf_doc *doc, cg_pdf_obj *dict)
+{
+	cg_pdf_obj *group = cg_pdf_dict_get(doc, dict, "Group");
+
+	if (group == NULL || group->type != kCGPDFObjectTypeDictionary) {
+		return false;
+	}
+	return cg_pdf_name_is(doc, cg_pdf_dict_get(doc, group, "S"), "Transparency");
+}
+
+static void fn_draw_transparency_form(fn_render *r, cg_pdf_obj *stream, cg_pdf_obj *resources,
+				      CGAffineTransform matrix, CGRect bbox)
+{
+	CGContextRef parent = r->ctx;
+	CGAffineTransform parent_ctm = CGContextGetCTM(parent);
+	CGRect user_box = CGRectApplyAffineTransform(bbox, matrix);
+	CGRect device = CGContextConvertRectToDeviceSpace(parent, user_box);
+	CGRect clip_device = CGContextConvertRectToDeviceSpace(parent, CGContextGetClipBoundingBox(parent));
+	size_t width;
+	size_t height;
+	unsigned char *buffer;
+	CGContextRef tile;
+	CGColorSpaceRef space;
+	CGImageRef image;
+	CGAffineTransform map;
+	CGAffineTransform flip;
+	fn_state saved_state;
+	CGContextRef saved_ctx;
+	CGPDFContentStreamRef saved_content;
+	cg_pdf_obj *saved_resources;
+	size_t saved_depth;
+	bool saved_pending;
+	bool saved_pending_eo;
+
+	device = CGRectIntersection(device, clip_device);
+	device = CGRectIntegral(device);
+	if (CGRectIsNull(device) || device.size.width < 1 || device.size.height < 1) {
+		return;
+	}
+	width = (size_t)device.size.width;
+	height = (size_t)device.size.height;
+	if (width > 4096 || height > 4096) {
+		fprintf(stderr, "CG-REFUSE: a transparency group covers %zux%zu device pixels, outside this renderer's "
+				"1..4096 offscreen range\n", width, height);
+		return;
+	}
+	buffer = calloc(height, width * 4);
+	if (buffer == NULL) {
+		return;
+	}
+	space = CGColorSpaceCreateDeviceRGB();
+	tile = CGBitmapContextCreate(buffer, width, height, 8, width * 4, space,
+				     kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+	CGColorSpaceRelease(space);
+	if (tile == NULL) {
+		free(buffer);
+		return;
+	}
+	CGContextClearRect(tile, CGRectMake(0, 0, (CGFloat)width, (CGFloat)height));
+
+	/* THE CTM THAT MAPS FORM SPACE ONTO THE TILE'S PIXELS: the form matrix, then the parent's CTM, then the
+	 * device origin. The tile's own default CTM is a y flip, so it is cancelled first (`flip`). */
+	flip = CGAffineTransformMake(1.0, 0.0, 0.0, -1.0, 0.0, (CGFloat)height);
+	map = CGAffineTransformConcat(
+		CGAffineTransformConcat(matrix, parent_ctm),
+		CGAffineTransformMakeTranslation(-device.origin.x, -device.origin.y));
+	CGContextConcatCTM(tile, CGAffineTransformConcat(map, flip));
+	CGContextClipToRect(tile, bbox);
+
+	saved_ctx = r->ctx;
+	saved_state = r->state;
+	saved_content = r->content;
+	saved_resources = r->page_resources;
+	saved_depth = r->depth;
+	saved_pending = r->pending_clip;
+	saved_pending_eo = r->pending_clip_eo;
+
+	r->ctx = tile;
+	fn_state_default(&r->state);
+	r->depth = 0;
+	r->pending_clip = false;
+	r->pending_clip_eo = false;
+	r->form_depth++;
+	fn_run_content(r, stream, resources != NULL ? resources : r->page_resources);
+	r->form_depth--;
+	r->ctx = saved_ctx;
+	r->state = saved_state;
+	r->content = saved_content;
+	r->page_resources = saved_resources;
+	r->depth = saved_depth;
+	r->pending_clip = saved_pending;
+	r->pending_clip_eo = saved_pending_eo;
+
+	image = CGBitmapContextCreateImage(tile);
+	CGContextRelease(tile);
+	if (image != NULL) {
+		CGRect user_rect = CGContextConvertRectToUserSpace(parent, device);
+
+		CGContextSaveGState(parent);
+		/* THE GROUP'S ALPHA IS THE NON-STROKING ALPHA AT `Do`. `CGContextSetAlpha` is what an image's draw
+		 * multiplies by; the fill colour's alpha does not reach it. */
+		CGContextSetAlpha(parent, r->state.fill_alpha);
+		/* AN IMAGE'S ROW 0 IS ITS TOP. In a y-up parent, `DrawImage` already puts row 0 at the rect's top; in a
+		 * y-down one it must be mirrored, exactly as NSImageRep's draw does. */
+		if (parent_ctm.d > 0.0) {
+			CGContextTranslateCTM(parent, user_rect.origin.x, user_rect.origin.y + user_rect.size.height);
+			CGContextScaleCTM(parent, 1.0, -1.0);
+			CGContextDrawImage(parent, CGRectMake(0, 0, (CGFloat)width, (CGFloat)height), image);
+		} else {
+			CGContextDrawImage(parent, user_rect, image);
+		}
+		CGContextRestoreGState(parent);
+		CGImageRelease(image);
+	}
+	free(buffer);
+}
+
 static void fn_do_xobject(fn_render *r, const char *name)
 {
 	cg_pdf_obj *object = cg_pdf_resolve(r->doc,
@@ -1616,6 +1737,10 @@ static void fn_do_xobject(fn_render *r, const char *name)
 						       (CGFloat)m[4], (CGFloat)m[5]);
 		}
 		box = cg_pdf_rect_from_object(r->doc, bbox, &ok);
+		if (ok && fn_form_is_transparency_group(r->doc, dict)) {
+			fn_draw_transparency_form(r, object, form_resources, matrix, box);
+			return;
+		}
 		CGContextSaveGState(r->ctx);
 		CGContextConcatCTM(r->ctx, matrix);
 		if (ok) {
@@ -2017,7 +2142,6 @@ static void fn_pop_components(fn_render *r, CGPDFScannerRef s, bool fill)
 	size_t count = fill ? fn_space_components(r->doc, r->state.fill_space) :
 			      fn_space_components(r->doc, r->state.stroke_space);
 	double values[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
-	cg_pdf_obj *space = fill ? r->state.fill_space : r->state.stroke_space;
 	size_t i;
 
 	if (fill ? r->state.fill_pattern_space : r->state.stroke_pattern_space) {

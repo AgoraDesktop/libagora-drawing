@@ -287,11 +287,14 @@ static CFDataRef fn_build_pdf(void)
 		CGContextSetShadowWithColor(ctx, CGSizeZero, 0, NULL);
 		CGColorRelease(black);
 	}
-	/* A TRANSPARENCY LAYER at alpha 1: an isolated transparency group, drawn at End. */
+	/* A TRANSPARENCY LAYER at 50%: the group is composited once, so the opaque rectangle inside comes out at
+	 * half alpha. */
+	CGContextSetAlpha(ctx, 0.5);
 	CGContextBeginTransparencyLayer(ctx, NULL);
 	CGContextSetRGBFillColor(ctx, 0.0, 0.0, 1.0, 1.0);
 	CGContextFillRect(ctx, CGRectMake(80, 60, 15, 10));
 	CGContextEndTransparencyLayer(ctx);
+	CGContextSetAlpha(ctx, 1.0);
 	CGPDFContextEndPage(ctx);
 
 	/* PAGE TWO, with its own media box in the page-info dictionary. */
@@ -607,8 +610,8 @@ static void fn_check_page_one(CGPDFDocumentRef document)
 
 	/* THE TRANSPARENCY GROUP'S CONTENT, drawn through the Form XObject's Do. */
 	pixel_at(buffer, 200, 100, CGPointMake(85, 65), px);
-	CHECK(px[3] > 200 && px[0] > 200 && px[1] < 60 && px[2] < 60,
-	      "the transparency group's rectangle is B=%u G=%u R=%u A=%u, expected opaque blue", px[0], px[1],
+	CHECK(px[3] > 60 && px[3] < 200 && px[0] > 80 && px[1] < 60 && px[2] < 60,
+	      "the 50%%-alpha transparency group is B=%u G=%u R=%u A=%u, expected half blue", px[0], px[1],
 	      px[2], px[3]);
 
 	pixel_at(buffer, 200, 100, CGPointMake(80, 20), px);
