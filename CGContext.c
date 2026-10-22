@@ -247,6 +247,12 @@ static void fn_pdf_paint_state(CGContextRef c, cg_pdf_paint_state *ps)
 	ps->stroke_pattern = c->state.stroke_pattern;
 	ps->fill_pattern_alpha = c->state.fill_pattern_alpha;
 	ps->stroke_pattern_alpha = c->state.stroke_pattern_alpha;
+	ps->shadow_active = c->state.shadow_rgba[3] > 0.0 && c->state.shadow_blur <= 0.0;
+	ps->shadow_offset[0] = c->state.shadow_offset.width;
+	ps->shadow_offset[1] = c->state.shadow_offset.height;
+	for (i = 0; i < 4; i++) {
+		ps->shadow_rgba[i] = c->state.shadow_rgba[i];
+	}
 }
 
 /* FORWARD, BECAUSE THE COLOUR SETTERS COME FIRST IN THIS FILE AND THE PATTERN THEY MUST CLEAR IS
@@ -1465,8 +1471,11 @@ void CGContextSetShadowWithColor(CGContextRef c, CGSize offset, CGFloat blur, CG
 	if (c == NULL) {
 		return;
 	}
-	if (c->writer != NULL) {
-		cg_pdf_writer_refuse(c->writer, "shadows");
+	/* A SHADOW WITH NO BLUR IS A HARD SILHOUETTE and can be written exactly; a blurred one cannot, because PDF has
+	 * no blur primitive. Refusing the blur here leaves the offset/colour state unset, so the content draws
+	 * unshadowed rather than with a shadow of the wrong softness. */
+	if (c->writer != NULL && blur > 0.0) {
+		cg_pdf_writer_refuse(c->writer, "a blurred shadow (a soft mask with a blur)");
 		return;
 	}
 	if (blur < 0.0) {

@@ -23,8 +23,10 @@
  * SAMPLED into a type 0 function, because a CGFunction is a callback rather than a PDF function expression. **COLORED
  * TILING PATTERNS ARE RECORDED**: the caller's `drawPattern` runs into a pattern content stream, and the page
  * selects it with `scn`/`SCN` (the CGPattern object this library creates is always colored and no-distortion).
- * Shadows, transparency layers and clip-to-mask are REFUSED BY NAME (`CG-REFUSE`), so a caller learns they were not
- * recorded instead of receiving a page that quietly lacks them.
+ * **A SHADOW WITH ZERO BLUR IS RECORDED** for paths and text: the silhouette is offset, painted in the shadow colour
+ * and put behind the content. A BLURRED shadow has no PDF primitive and is refused, as is a shadow on an image or a
+ * shading (there is no path to silhouette). Transparency layers and clip-to-mask are REFUSED BY NAME (`CG-REFUSE`),
+ * so a caller learns they were not recorded instead of receiving a page that quietly lacks them.
  *
  * THE AUXILIARY AND PAGE-INFO DICTIONARIES are Apple's: the keys below, a `CFStringRef` value for each textual
  * field, and a `CFDataRef` wrapping a `CGRect` for each box.

@@ -239,6 +239,7 @@ struct cg_pdf_writer {
 	size_t font_cap;
 	unsigned next_image;
 	bool warned_no_embed;
+	bool warned_shadow_unsupported;
 
 	bool closed;
 	bool failed;
@@ -603,6 +604,15 @@ void cg_pdf_writer_set_metadata(struct cg_pdf_writer *w, CFDataRef metadata)
 	w->metadata = metadata != NULL ? (CFDataRef)CFRetain(metadata) : NULL;
 }
 
+static void fn_warn_shadow_unsupported(struct cg_pdf_writer *w, const cg_pdf_paint_state *paint, const char *what)
+{
+	if (paint != NULL && paint->shadow_active && !w->warned_shadow_unsupported) {
+		fprintf(stderr, "CG-REFUSE: a shadow on %s is not recorded; this writer writes shadows for PATHS and "
+				"TEXT only, because those are the paints with a silhouette it can offset\n", what);
+		w->warned_shadow_unsupported = true;
+	}
+}
+
 void cg_pdf_writer_refuse(struct cg_pdf_writer *w, const char *what)
 {
 	(void)w;
@@ -889,6 +899,48 @@ static bool fn_emit_stroke_colour(struct cg_pdf_writer *w, const cg_pdf_paint_st
 /* recording: painting                                                       */
 /* ------------------------------------------------------------------------- */
 
+static const char *fn_paint_operator(int operation)
+{
+	static const char *operators[] = { "f", "f*", "S", "B", "B*" };
+
+	return operation >= 0 && operation <= 4 ? operators[operation] : "";
+}
+
+/* **A HARD SHADOW: THE SAME PATH, OFFSET, IN THE SHADOW COLOUR, PAINTED FIRST.** PDF has no shadow primitive and no
+ * blur; with a zero blur the shadow of a filled or stroked path is exactly that silhouette, so it can be written
+ * rather than refused. Images and shadings have no path to silhouette and are named at their doors below. */
+static void fn_emit_shadow_path(struct cg_pdf_writer *w, CGPathRef path, int operation,
+				const cg_pdf_paint_state *paint)
+{
+	bool fill = operation == CG_PDF_PAINT_FILL || operation == CG_PDF_PAINT_EOFILL ||
+		    operation == CG_PDF_PAINT_FILLSTROKE || operation == CG_PDF_PAINT_EOFILLSTROKE;
+	bool stroke = operation == CG_PDF_PAINT_STROKE || operation == CG_PDF_PAINT_FILLSTROKE ||
+		      operation == CG_PDF_PAINT_EOFILLSTROKE;
+	cg_pdf_paint_state shadow = *paint;
+
+	shadow.shadow_active = false;
+	shadow.fill_pattern = NULL;
+	shadow.stroke_pattern = NULL;
+	shadow.fill[0] = shadow.stroke[0] = paint->shadow_rgba[0];
+	shadow.fill[1] = shadow.stroke[1] = paint->shadow_rgba[1];
+	shadow.fill[2] = shadow.stroke[2] = paint->shadow_rgba[2];
+	shadow.fill[3] = shadow.stroke[3] = paint->shadow_rgba[3];
+
+	fn_content_printf(w, "q\n1 0 0 1 %.4f %.4f cm\n", (double)paint->shadow_offset[0],
+			  (double)paint->shadow_offset[1]);
+	fn_emit_gstate(w, &shadow, fill, stroke);
+	if (fill) {
+		(void)fn_emit_fill_colour(w, &shadow);
+	}
+	if (stroke) {
+		(void)fn_emit_stroke_colour(w, &shadow);
+	}
+	if (fn_serialise_path(&w->content, path)) {
+		fn_content_printf(w, "%s\n", fn_paint_operator(operation));
+	}
+	fn_content_printf(w, "Q\n");
+}
+
 void cg_pdf_writer_paint_path(struct cg_pdf_writer *w, CGPathRef path, int operation,
 			      const cg_pdf_paint_state *paint)
 {
@@ -905,6 +957,9 @@ void cg_pdf_writer_paint_path(struct cg_pdf_writer *w, CGPathRef path, int opera
 		fprintf(stderr, "CG-REFUSE: a drawing call on a CGPDFContext with no page open was not "
 				"recorded (call CGPDFContextBeginPage)\n");
 		return;
+	}
+	if (paint->shadow_active) {
+		fn_emit_shadow_path(w, path, operation, paint);
 	}
 	fn_emit_gstate(w, paint, fill, stroke);
 	if (fill && !fn_emit_fill_colour(w, paint)) {
@@ -1014,6 +1069,7 @@ void cg_pdf_writer_image(struct cg_pdf_writer *w, CGRect rect, CGImageRef image,
 	if (w == NULL || image == NULL || paint == NULL) {
 		return;
 	}
+	fn_warn_shadow_unsupported(w, paint, "an image");
 	if (!w->page_open) {
 		fprintf(stderr, "CG-REFUSE: an image on a CGPDFContext with no page open was not recorded\n");
 		return;
@@ -1310,6 +1366,7 @@ bool cg_pdf_writer_gradient(struct cg_pdf_writer *w, CGGradientRef gradient, boo
 	if (w == NULL || gradient == NULL || paint == NULL) {
 		return false;
 	}
+	fn_warn_shadow_unsupported(w, paint, "a gradient");
 	if (!w->page_open) {
 		fprintf(stderr, "CG-REFUSE: a gradient on a CGPDFContext with no page open was not recorded\n");
 		return false;
@@ -1458,6 +1515,7 @@ bool cg_pdf_writer_shading(struct cg_pdf_writer *w, CGShadingRef shading, const 
 	if (w == NULL || shading == NULL || paint == NULL) {
 		return false;
 	}
+	fn_warn_shadow_unsupported(w, paint, "a shading");
 	if (!w->page_open) {
 		fprintf(stderr, "CG-REFUSE: a shading on a CGPDFContext with no page open was not recorded\n");
 		return false;
@@ -1796,6 +1854,8 @@ bool cg_pdf_writer_text_glyph(struct cg_pdf_writer *w, CGFontRef font_ref, CGGly
 			      const cg_pdf_paint_state *paint)
 {
 	struct cg_pdf_font_resource *font;
+	const char *resource_name;
+	int hex_digits;
 	double em;
 	double a;
 	double b;
@@ -1820,35 +1880,15 @@ bool cg_pdf_writer_text_glyph(struct cg_pdf_writer *w, CGFontRef font_ref, CGGly
 		if (cid == 0 || shard == NULL) {
 			return false;
 		}
-		em = (double)font_size / (double)font->upem;
-		a = text_matrix.a;
-		b = text_matrix.b;
-		c = text_matrix.c;
-		d = text_matrix.d;
-		e = pen.x + text_matrix.tx * em;
-		f = pen.y + text_matrix.ty * em;
-		fn_emit_gstate(w, paint, mode != 1, mode != 0);
-		if (mode != 1) {
-			fn_emit_fill_colour(w, paint);
+		resource_name = shard->name;
+		hex_digits = 2;
+	} else {
+		cid = fn_cid_for(font, glyph);
+		if (cid == 0) {
+			return false;
 		}
-		if (mode != 0) {
-			fn_emit_stroke_colour(w, paint);
-		}
-		fn_content_printf(w, "BT\n/%s %.4f Tf\n%d Tr\n%.4f %.4f %.4f %.4f %.4f %.4f Tm\n<%02X> Tj\nET\n",
-				  shard->name, (double)font_size, mode, a, b, c, d, e, f, cid);
-		return true;
-	}
-	cid = fn_cid_for(font, glyph);
-	if (cid == 0) {
-		return false;
-	}
-
-	fn_emit_gstate(w, paint, mode != 1, mode != 0);
-	if (mode != 1) {
-		fn_emit_fill_colour(w, paint);
-	}
-	if (mode != 0) {
-		fn_emit_stroke_colour(w, paint);
+		resource_name = font->name;
+		hex_digits = 4;
 	}
 	em = (double)font_size / (double)font->upem;
 	a = text_matrix.a;
@@ -1857,10 +1897,53 @@ bool cg_pdf_writer_text_glyph(struct cg_pdf_writer *w, CGFontRef font_ref, CGGly
 	d = text_matrix.d;
 	e = pen.x + text_matrix.tx * em;
 	f = pen.y + text_matrix.ty * em;
-	fn_content_printf(w, "BT\n/%s %.4f Tf\n%d Tr\n%.4f %.4f %.4f %.4f %.4f %.4f Tm\n<%04X> Tj\nET\n",
-			  font->name, (double)font_size, mode, a, b, c, d, e, f, cid);
+
+	/* THE SHADOW RUN FIRST, offset and in the shadow colour, with the same text operator as the glyph itself. */
+	if (paint->shadow_active) {
+		cg_pdf_paint_state shadow = *paint;
+
+		shadow.shadow_active = false;
+		shadow.fill_pattern = NULL;
+		shadow.stroke_pattern = NULL;
+		shadow.fill[0] = shadow.stroke[0] = paint->shadow_rgba[0];
+		shadow.fill[1] = shadow.stroke[1] = paint->shadow_rgba[1];
+		shadow.fill[2] = shadow.stroke[2] = paint->shadow_rgba[2];
+		shadow.fill[3] = shadow.stroke[3] = paint->shadow_rgba[3];
+		fn_content_printf(w, "q\n1 0 0 1 %.4f %.4f cm\n", (double)paint->shadow_offset[0],
+				  (double)paint->shadow_offset[1]);
+		fn_emit_gstate(w, &shadow, mode != 1, mode != 0);
+		if (mode != 1) {
+			(void)fn_emit_fill_colour(w, &shadow);
+		}
+		if (mode != 0) {
+			(void)fn_emit_stroke_colour(w, &shadow);
+		}
+		fn_content_printf(w, "BT\n/%s %.4f Tf\n%d Tr\n%.4f %.4f %.4f %.4f %.4f %.4f Tm\n",
+				  resource_name, (double)font_size, mode, a, b, c, d, e, f);
+		if (hex_digits == 2) {
+			fn_content_printf(w, "<%02X> Tj\nET\nQ\n", cid);
+		} else {
+			fn_content_printf(w, "<%04X> Tj\nET\nQ\n", cid);
+		}
+	}
+
+	fn_emit_gstate(w, paint, mode != 1, mode != 0);
+	if (mode != 1) {
+		(void)fn_emit_fill_colour(w, paint);
+	}
+	if (mode != 0) {
+		(void)fn_emit_stroke_colour(w, paint);
+	}
+	fn_content_printf(w, "BT\n/%s %.4f Tf\n%d Tr\n%.4f %.4f %.4f %.4f %.4f %.4f Tm\n",
+			  resource_name, (double)font_size, mode, a, b, c, d, e, f);
+	if (hex_digits == 2) {
+		fn_content_printf(w, "<%02X> Tj\nET\n", cid);
+	} else {
+		fn_content_printf(w, "<%04X> Tj\nET\n", cid);
+	}
 	return true;
 }
+
 
 /* ------------------------------------------------------------------------- */
 /* the font programs, at Close                                               */

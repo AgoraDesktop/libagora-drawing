@@ -277,6 +277,16 @@ static CFDataRef fn_build_pdf(void)
 			CHECK(0, "the pattern fixture was refused");
 		}
 	}
+	/* A HARD SHADOW: zero blur, so the offset silhouette is exact and recordable. */
+	{
+		CGColorRef black = CGColorCreateGenericGray(0.0, 0.5);
+
+		CGContextSetShadowWithColor(ctx, CGSizeMake(3.0, -3.0), 0, black);
+		CGContextSetRGBFillColor(ctx, 1.0, 0.0, 0.0, 1.0);
+		CGContextFillRect(ctx, CGRectMake(60, 70, 15, 10));
+		CGContextSetShadowWithColor(ctx, CGSizeZero, 0, NULL);
+		CGColorRelease(black);
+	}
 	CGPDFContextEndPage(ctx);
 
 	/* PAGE TWO, with its own media box in the page-info dictionary. */
@@ -528,6 +538,18 @@ static void fn_check_page_one(CGPDFDocumentRef document)
 		}
 		CHECK(border_ink, "the patterned stroke painted nothing along its border");
 	}
+
+	/* THE SHADOW: a half-transparent black silhouette offset by (3,-3), and the content on top. */
+	pixel_at(buffer, 200, 100, CGPointMake(66, 68), px);
+	CHECK(px[3] > 50 && px[3] < 220 && px[0] < 80 && px[1] < 80 && px[2] < 80,
+	      "the hard shadow is B=%u G=%u R=%u A=%u, expected half-transparent black", px[0], px[1], px[2],
+	      px[3]);
+	pixel_at(buffer, 200, 100, CGPointMake(65, 75), px);
+	CHECK(px[3] > 200 && px[2] > 200 && px[0] < 60 && px[1] < 60,
+	      "the shadowed rectangle itself is B=%u G=%u R=%u A=%u, expected opaque red", px[0], px[1], px[2],
+	      px[3]);
+	pixel_at(buffer, 200, 100, CGPointMake(59, 75), px);
+	CHECK(px[3] < 30, "the shadow was painted outside its offset silhouette (A=%u)", px[3]);
 
 	pixel_at(buffer, 200, 100, CGPointMake(80, 20), px);
 	/* THE DESTINATION IS PREMULTIPLIED, so a 50% red over transparent is R=A=128, not R=255. */

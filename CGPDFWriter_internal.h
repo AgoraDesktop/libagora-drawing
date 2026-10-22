@@ -17,9 +17,10 @@
  *
  * WHAT IS RECORDED: `q`/`Q`, `cm`, path construction and painting, clips, images (with an /SMask when the image
  * has alpha), gradients (as axial/radial shadings with a stitching function), and text as real text or glyph
- * outlines; colored tiling patterns run the caller's draw callback into a pattern content stream. WHAT IS REFUSED
- * BY NAME: per-stop-alpha gradients, shadings outside DeviceGray/RGB/CMYK, uncolored patterns, shadows,
- * transparency layers and clip-to-mask. Text is vector and correct but not selectable — embedding a font program
+ * outlines; colored tiling patterns run the caller's draw callback into a pattern content stream; a zero-blur shadow
+ * is a hard silhouette behind paths and text. WHAT IS REFUSED BY NAME: per-stop-alpha gradients, shadings outside
+ * DeviceGray/RGB/CMYK, uncolored patterns, BLURRED shadows (and shadows on images or shadings), transparency
+ * layers and clip-to-mask. Text is vector and correct but not selectable — embedding a font program
  * is a later landing, and calling an outline a glyph would be the sort of lie this tree refuses.
  */
 #ifndef CORE_GRAPHICS_CGPDFWRITER_INTERNAL_H
@@ -56,6 +57,10 @@ typedef struct cg_pdf_paint_state {
 	CGPatternRef stroke_pattern;
 	CGFloat fill_pattern_alpha;
 	CGFloat stroke_pattern_alpha;
+	/* THE SHADOW, when one is set and has zero blur (a blurred one is refused at CGContextSetShadowWithColor). */
+	bool shadow_active;
+	CGFloat shadow_offset[2];
+	CGFloat shadow_rgba[4];
 } cg_pdf_paint_state;
 
 enum {

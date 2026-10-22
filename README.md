@@ -173,7 +173,9 @@ been converted back to CF", with lcms2 "not installed on this machine").
   geometry becomes a type 2 or 3 shading. **COLORED TILING PATTERNS ARE RECORDED**: the caller's `drawPattern` is
   run into a pattern content stream (with its own `/Resources`, including whatever the tile uses), and the page
   selects it with `/Pattern cs` and `scn` or `SCN`; this renderer draws one by rasterising the tile once and tiling
-  it through a CGPattern. The PDF context still REFUSES BY NAME uncolored patterns, shadows, transparency layers
+  it through a CGPattern. **A ZERO-BLUR SHADOW IS RECORDED** for paths and text: the silhouette is offset, painted
+  in the shadow colour and put behind the content. A BLURRED shadow has no PDF primitive and is refused, as is a
+  shadow on an image or a shading. The PDF context still REFUSES BY NAME uncolored patterns, transparency layers
   and clip-to-mask, so a caller knows when a page lacks them.
 - **PDF encryption is reported, not decrypted.** `CGPDFDocumentIsEncrypted` answers true and the pages, catalog and
   info refuse by name; `IsUnlocked` is therefore false for an encrypted file and there is no password door.
