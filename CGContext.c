@@ -2505,6 +2505,11 @@ static void cg_traps_for_path(CGContextRef c, CGPathRef path, int even_odd, cg_t
 	}
 	cg_close_subpath(&fl);
 	cg_sweep(&fl, tr, even_odd);
+	/* BOTH FLATTENER ARRAYS ARE THE FILL'S, and both outlive only this function: `fl.pts` is the
+	 * unclipped subpath the sweep reads, `fl.edges` the clipped outline it builds from it. The two are
+	 * freed together here, by the one owner, so a fill cannot retain the vertices of a path it already
+	 * swept — which is what it did while only the edges were freed. */
+	free(fl.pts);
 	free(fl.edges);
 }
 

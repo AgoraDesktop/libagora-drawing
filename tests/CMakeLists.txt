@@ -79,3 +79,14 @@ target_link_libraries(eps_write PRIVATE Drawing CoreFoundation::CoreFoundation)
 add_test(NAME eps-write COMMAND eps_write)
 set_tests_properties(eps-write PROPERTIES SKIP_RETURN_CODE 77 ENVIRONMENT
   "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")
+
+# **THE FILL'S OWN HEAP COST.** `cg_traps_for_path` owns two arrays — the flattened vertices and the
+# clipped outline — and must release both. This case interposes the allocation doors and measures
+# outstanding bytes across 256 fills, 256 clips, and a build-only control that must also retain nothing.
+# The accounting is glibc's (`__libc_malloc`, `malloc_usable_size`), so the case SKIPS with 77 elsewhere.
+add_executable(flatten_memory flatten_memory.c)
+target_link_libraries(flatten_memory PRIVATE Drawing CoreFoundation::CoreFoundation)
+
+add_test(NAME flatten-memory COMMAND flatten_memory)
+set_tests_properties(flatten-memory PROPERTIES SKIP_RETURN_CODE 77 ENVIRONMENT
+  "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")
