@@ -1336,7 +1336,9 @@ int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size, CGAf
  * Mac-shaped paths, and on Linux NOT ONE OF THEM EXISTS, so the registry enumerated nothing, every face lookup
  * answered NULL, every string measured zero, and a menu was a column of empty rows three layers above the cause.
  * The Mac's paths stay, because this tree does run there; the Linux and FreeBSD ones are added, because that is
- * what Agora is for. THE TWO LAYOUTS DIFFER and the walk below is what reconciles them. */
+ * what Agora is for. THE TWO LAYOUTS DIFFER and the walk below is what reconciles them. THE ACCOUNT'S OWN
+ * `~/Library/Fonts` is not a literal here: it is relative to a home, so `fn_home_font_dir()` resolves it and
+ * both walks put it FIRST, which is the Mac's order - a font the user installed belongs to that user. */
 static const char *fn_font_dirs[] = {
 	/* Agora's own set, then this tree's staging and the Mac-shaped paths. */
 	AGORA_FONT_DIR,
@@ -1358,6 +1360,27 @@ static const char *fn_font_dirs[] = {
  * is not a font, and nothing else. The depth is bounded rather than unlimited so that a symlink loop is a short
  * walk instead of a hang. */
 #define FN_FONT_MAX_DEPTH 4
+
+/* **`~/Library/Fonts` IS THE ACCOUNT'S FONT DIRECTORY, AND IT IS RESOLVED ONCE.** It is the only entry in
+ * the list that is relative to a home, and the Mac's order puts it BEFORE the machine's /Library/Fonts: a
+ * font a user installed belongs to that user. A complete installation creates the directory (README, "The
+ * installation") and the login creates it for an existing account; a missing one costs the walk an
+ * opendir, since the walk treats an unreadable directory as empty. */
+static const char *fn_home_font_dir(void)
+{
+	static char path[1024];
+	static int resolved = 0;
+
+	if (!resolved) {
+		const char *home = getenv("HOME");
+
+		resolved = 1;
+		if (home != NULL && home[0] == '/' && strlen(home) + strlen("/Library/Fonts") < sizeof path) {
+			snprintf(path, sizeof path, "%s/Library/Fonts", home);
+		}
+	}
+	return (path[0] != '\0') ? path : NULL;
+}
 
 static int fn_has_font_suffix(const char *name)
 {
@@ -1579,6 +1602,11 @@ CGFontRef cg_font_create_with_name(const char *name)
 		}
 	}
 	if (ndirs == 0) {
+		const char *homeFonts = fn_home_font_dir();
+
+		if (homeFonts != NULL) {
+			dirs[ndirs++] = homeFonts;
+		}
 		for (i = 0; i < (int)(sizeof fn_font_dirs / sizeof fn_font_dirs[0]); i++) {
 			dirs[ndirs++] = fn_font_dirs[i];
 		}
@@ -1668,6 +1696,11 @@ void cg_font_enumerate(cg_font_visit visit, void *info)
 		}
 	}
 	if (ndirs == 0) {
+		const char *homeFonts = fn_home_font_dir();
+
+		if (homeFonts != NULL) {
+			dirs[ndirs++] = homeFonts;
+		}
 		for (i = 0; i < sizeof fn_font_dirs / sizeof fn_font_dirs[0]; i++) {
 			dirs[ndirs++] = fn_font_dirs[i];
 		}
