@@ -1491,6 +1491,40 @@ static int case_clip_to_mask(void)
 	check(!pixel_lit(buf, side, 2, 8), "a pixel over the mask's BLACK half was painted");
 	check(pixel_lit(buf, side, 12, 8), "a pixel over the mask's WHITE half was not painted");
 
+	/* **AND A SURFACE WHOSE WIDTH IS NOT A MULTIPLE OF FOUR.** The cover image `CGContextClipToMask` builds for
+	 * pixman needs a row stride padded to four bytes; passing the surface width worked for every 16- or 32-pixel
+	 * canvas this suite used and returned NULL for a 17-pixel one — silently, because the door returns when the
+	 * image cannot be made. MEASURED at 1.332 scale on a 1705-pixel window: every clip mask was lost, and toolbar
+	 * images were drawn as solid rectangles because their stencil filled the whole rectangle. The same half-mask
+	 * must clip half of a 17-pixel-wide fill. */
+	{
+		const size_t wide = 17;
+		unsigned char *buf2 = (unsigned char *)calloc(wide * wide, 4);
+		CGContextRef ctx2;
+		size_t px = 0, i;
+
+		check(buf2 != NULL, "the odd-width context buffer could not be allocated");
+		if (buf2 != NULL) {
+			ctx2 = CGBitmapContextCreate(buf2, wide, wide, 8, wide * 4, rgb,
+						     kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+			check(ctx2 != NULL, "a %zux%zu context was refused", wide, wide);
+			if (ctx2 != NULL) {
+				CGContextClipToMask(ctx2, CGRectMake(0, 0, 16, 16), mask);
+				CGContextSetRGBFillColor(ctx2, 0, 0, 1, 1);
+				CGContextFillRect(ctx2, CGRectMake(0, 0, 16, 16));
+				for (i = 0; i < wide * wide; i++) {
+					if ((buf2[i * 4] | buf2[i * 4 + 3]) != 0) {
+						px++;
+					}
+				}
+				check(px == 128, "the same mask on a 17-pixel-wide surface painted %zu of 256 pixels, "
+						  "want 128", px);
+				CGContextRelease(ctx2);
+			}
+			free(buf2);
+		}
+	}
+
 	/* AND THE REFUSAL, WHICH LEAVES THE CLIP AS IT WAS RATHER THAN MAKING ONE UP. */
 	{
 		CGImageRef rgb_mask;

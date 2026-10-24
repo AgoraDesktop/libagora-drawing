@@ -1249,6 +1249,7 @@ void CGContextClipToMask(CGContextRef c, CGRect rect, CGImageRef mask)
 	}
 	pixman_image_t *cover;
 	unsigned char *bytes;
+	int mask_stride;
 	CGAffineTransform inverse;
 	int left, top, right, bottom;
 	int x, y;
@@ -1291,12 +1292,20 @@ void CGContextClipToMask(CGContextRef c, CGRect rect, CGImageRef mask)
 	 * in the mask, and multiplying the clipping area by 1 leaves it as it was. ONLY THE RECTANGLE'S OWN
 	 * PIXELS ARE SAMPLED, and it is the RECTANGLE that bounds them rather than the parallelogram — a
 	 * bounding box under a rotation has corners outside the shape, and those must stay at 1. */
-	bytes = calloc(1, (size_t)c->width * (size_t)c->height);
+	/* **THE ROW STRIDE IS PADDED TO FOUR BYTES, AND A CLIP MASK IS NOT OPTIONAL.** `pixman_image_create_bits`
+	 * requires a stride that is a multiple of four; passing the SURFACE WIDTH instead works for every window whose
+	 * width happens to be a multiple of four and returns NULL — silently, because this function returns — for every
+	 * one that is not. MEASURED at 1.332 scale: a 1705-pixel-wide window lost EVERY clip mask, and the visible
+	 * symptom was toolbar and button images drawn as solid rectangles, because a template image's fill was no longer
+	 * clipped to its stencil. The width is the one number a caller does not control, so the stride is rounded up
+	 * here and used for both the buffer and its rows. */
+	mask_stride = (c->width + 3) & ~3;
+	bytes = calloc(1, (size_t)mask_stride * (size_t)c->height);
 	if (bytes == NULL) {
 		return;
 	}
-	memset(bytes, 255, (size_t)c->width * (size_t)c->height);
-	cover = pixman_image_create_bits(PIXMAN_a8, c->width, c->height, (uint32_t *)bytes, c->width);
+	memset(bytes, 255, (size_t)mask_stride * (size_t)c->height);
+	cover = pixman_image_create_bits(PIXMAN_a8, c->width, c->height, (uint32_t *)bytes, mask_stride);
 	if (cover == NULL) {
 		free(bytes);
 		return;
@@ -1312,7 +1321,7 @@ void CGContextClipToMask(CGContextRef c, CGRect rect, CGImageRef mask)
 			}
 			/* THE COVERAGE RULE IS `CGImageCreateWithMask`'S AND THE SAMPLER'S: an image mask is an
 			 * INVERSE alpha and an image is the alpha itself, both of them this one function. */
-			bytes[(size_t)y * (size_t)c->width + (size_t)x] =
+			bytes[(size_t)y * (size_t)mask_stride + (size_t)x] =
 				(unsigned char)(0.5 + 255.0 * cg_image_mask_coverage(mask, CGImageGetDecode(mask),
 										     u, v));
 		}
