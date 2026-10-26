@@ -89,9 +89,35 @@ times per pixel, for an answer the three sub-columns of one pixel cannot disagre
 
 MEASURED (2026, best of five, baseline subtracted, same 47-character run through `CGContextShowTextAtPoint` at
 13 px): a warm grey glyph **617–658 ns → 447–454 ns** (about 29% less) and a sub-pixel one **1998–2110 ns → 1560–1606
-ns** (about 24%). For a terminal that is a 2000-cell repaint at ~0.9 ms grey or ~3.2 ms with smoothing, against
-~1.3 ms and ~4.2 ms before. What remains is the composite itself and the full-window damage the seam still asks for
-(see "What is not done").
+ns** (about 24%).
+
+**AND A GREY RUN IS NOW ONE COMPOSITE PER BATCH RATHER THAN ONE PER GLYPH.** The measurement that says this is worth
+doing was taken on pixman directly: 3750 boxes of 8x15 composited one at a time cost 349 ns each, and the same boxes
+packed into one strip per row cost 169 ns — the same pixels, half the time, because pixman's fast-path selection and
+region setup happen once per strip. `cg_paint_glyph_run` is that, and it is the door every filled text run comes
+through: `ShowGlyphs`, `ShowText`, `ShowGlyphsAtPoint` and `ShowGlyphsAtPositions` (which is how Core Text and the
+layout manager draw). Glyphs are placed into one a8 strip and the strip is composited once.
+
+**FOUR THINGS ARE DELIBERATELY NOT BATCHED, AND TWO OF THEM ARE MEASUREMENTS.** A recording context's text is the
+writer's to record; a stroke or clip text mode is geometry; a clip MASK has to be multiplied into each glyph's own
+coverage; and **sub-pixel coverage never uses pixman at all** — it is this file's hand blend, a loop over the glyph's
+own pixels with no per-composite setup to amortise. Batching it was MEASURED as a regression (5.6–6.3 ms a frame for
+a 150x25 grid against 8.3–8.9 with a strip), so the smoothed path stays per glyph by measurement rather than by
+convenience.
+
+TWO GLYPHS THAT OVERLAP ARE PAINTED IN SEPARATE BATCHES, because one combined mask would blend each destination pixel
+once where two passes blend it twice. The test is INK, not boxes: adjacent monospace cells overlap by a pixel or two
+of bearing that is empty, and flushing on boxes alone left text unbatched (and the batched path *slower*). Where the
+boxes do intersect, the shared rectangle is checked for coverage on both sides, and the strip is merged with a
+max-copy so that a later glyph's zeroes cannot erase an earlier one's ink.
+
+MEASURED end to end (best of five, interleaved with the previous build on the same machine, a 150x25 grid of realistic
+mixed text): **grey 1.58–1.70 ms → 1.26–1.31 ms a frame** (about 20%), and **447–493 ns → 316–338 ns** per glyph;
+sub-pixel is unchanged at ~1.6 µs a glyph, which is the honest result of leaving it alone. `CG_TEXT_DIAG=1` makes the
+painter report how many glyphs one batch carries, which is the number that says whether this engaged at all.
+
+What remains is the composite itself, the hand blend's shape, and the full-window damage the seam still asks for (see
+"What is not done").
 
 ## Status
 
@@ -261,13 +287,15 @@ been converted back to CF", with lcms2 "not installed on this machine").
 
 ### What is not done
 
-- **THE GLYPH'S BITMAP, ADVANCE AND PAINT IMAGES ARE ALL KEPT; THE COMPOSITE ITSELF IS NOT.** A warm grey glyph now
-  costs ~0.45 µs and a sub-pixel one ~1.56 µs (measured, see above), of which the mask copy, the composite and — for
-  sub-pixel coverage — this file's hand blend are the whole of it. What is still missing is not a cache but a change of
-  SHAPE: the hand blend could write three channels at once instead of per sample, and a terminal-style caller would
-  rather have a glyph ATLAS (the pictures drawn once into one surface, then blitted) than one composite per glyph.
-  Neither is blocked on anything; both are bigger than the reuse this file does now, and neither is required by
-  anything in the tree yet.
+- **THE GLYPH'S BITMAP, ADVANCE, PAINT IMAGES AND GREY RUNS ARE ALL KEPT; SUB-PIXEL RUNS AND THE WHOLE-WINDOW
+  DAMAGE ARE NOT.** A grey run is one composite per batch now (see above) and a grey glyph costs ~0.33 µs; a sub-pixel
+  one still costs ~1.6 µs, because that coverage goes through this file's hand blend rather than pixman and batching it
+  was measured as a regression. What is left there is the blend's own shape — three channels written in one pass over
+  a contiguous strip, with the region test hoisted out of the loop it currently sits in — which is a rewrite of one
+  loop, not a cache. And the client still damages its WHOLE window on every commit
+  (`wl_surface_damage_buffer(0, 0, width, height)`), so a terminal's scrolling repaint costs the compositor a full
+  window per frame whatever this library saves; that is a change in the seam (`AGEndFrame`'s damage rectangle), not in
+  this repository.
 - **TEXT AS OUTLINES IS OUTSIDE BOTH CACHES.** PDF embedding and text-as-path use `cg_font_glyph_outline`, which
   neither cache covers — a PDF places each glyph once, and a stroked or clipped glyph is geometry rather than a
   mask, so there is nothing to reuse in either.
