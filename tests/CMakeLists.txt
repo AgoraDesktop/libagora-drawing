@@ -40,6 +40,16 @@ target_compile_definitions(glyph_cache PRIVATE
   AGORA_TEST_FONT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fonts")
 
 add_test(NAME glyph-cache COMMAND glyph_cache)
+
+# THE ADVANCE CACHE: values compared against a font whose cache is cold, the per-font counters proving the second
+# ask is the cached one, the all-or-nothing refusal leaving the caller's array untouched while keeping what loaded,
+# and a batch agreeing with a trickle. The face comes from the bundled directory for the same reason `fonts` does.
+add_executable(glyph_advances glyph_advances.c)
+target_link_libraries(glyph_advances PRIVATE Drawing CoreFoundation::CoreFoundation)
+target_compile_definitions(glyph_advances PRIVATE
+  AGORA_TEST_FONT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fonts")
+
+add_test(NAME glyph-advances COMMAND glyph_advances)
 # The library's own dependencies (libobjc and Core Foundation's) live in the install prefix, and DT_RUNPATH is
 # NOT inherited by a transitive dependency — so the prefix's lib directory has to be on `LD_LIBRARY_PATH` for
 # the hops to resolve. The directories come from imported targets rather than being written down.
@@ -50,6 +60,8 @@ set_tests_properties(window-levels PROPERTIES ENVIRONMENT
 set_tests_properties(fonts PROPERTIES ENVIRONMENT
   "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")
 set_tests_properties(glyph-cache PROPERTIES ENVIRONMENT
+  "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")
+set_tests_properties(glyph-advances PROPERTIES ENVIRONMENT
   "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")
 
 # THE PDF READER: two fixtures built byte by byte (a classic cross-reference table and a PDF 1.5 xref stream with

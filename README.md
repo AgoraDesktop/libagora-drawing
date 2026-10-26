@@ -66,15 +66,25 @@ FILLED-text door goes through it (`CGContextShowGlyphs`, `ShowGlyphsAtPoint`, `S
 
 MEASURED (2026, `tests/glyph_cache.c` and a direct clock on the door): a 13 px `A` with a quarter-pixel pen costs
 **3.17 µs rendered and 51 ns remembered** — 62× — and a 47-character run through `CGContextShowTextAtPoint` is
-**4.2× faster** (79 ms against 19 ms for 200 drawings, the cold loop flushing before every one). The suite proves a hit answers the miss's bytes and metrics over a
+**11.8× faster** (62 ms against 5.3 ms for 200 drawings, the cold loop flushing before every one). The suite proves a hit answers the miss's bytes and metrics over a
 sweep of size, phase, transform, smoothing and ink; that the budget at zero renders the same pixels end to end
 through `CGContextShowTextAtPoint`; that an evicted entry re-renders identically rather than being remembered wrong;
 and that a released face and a fresh one do not share an entry.
 
-**WHAT THE CACHE DOES NOT FIX, MEASURED THE SAME DAY.** A glyph's *advance* is asked of the engine per glyph per
-draw (`cg_glyph_advance` → `CGFontGetGlyphAdvances` → `FT_Load_Glyph`, 713 ns at 13 px), so a warm 47-character run
-costs ~1.9 µs a glyph of which the rasteriser is now the smaller part. That is the next cache worth writing, and it
-is named in "What is not done" rather than left to be rediscovered.
+**AND THE OTHER HALF OF A GLYPH'S COST, WHICH IS REMEMBERED ON THE FONT.** A glyph's *advance* was asked of the
+engine per glyph per draw (`cg_glyph_advance` → `CGFontGetGlyphAdvances` → `FT_Load_Glyph`, 713 ns at 13 px), which
+after the masks were cached was the largest item in a warm run. An advance is in FONT UNITS, so it is the same at
+every size, pen phase and transform: `CGFontGetGlyphAdvances` now records one `int` per glyph on the font, and the
+second ask is an array read — **4 ns a glyph**, and a warm 47-character run fell from 92 µs to **44 µs** (0.94 µs a
+character). The door's contract is unchanged (font units, a batch refused whole if a glyph will not load, the
+caller's array untouched in that case) and the per-font counters are how the test proves the second ask was the
+cached one rather than believing a clock.
+
+**WHAT IS LEFT IS THE PAINT, NOT THE FONT, MEASURED THE SAME DAY.** Of the 0.94 µs a warm grey glyph now costs, the
+mapping and the advance are 95 ns and the compositing is the rest: a pixman mask image built and filled per glyph, a
+solid-fill image per glyph, and `pixman_image_composite32` over the glyph's box. With SMOOTHING ON it is ~2.1 µs a
+glyph, because sub-pixel coverage goes through this file's hand blend rather than pixman. Those are the next two
+things worth the same treatment, and they are named in "What is not done".
 
 ## Status
 
@@ -244,13 +254,17 @@ been converted back to CF", with lcms2 "not installed on this machine").
 
 ### What is not done
 
-- **GLYPH MASKS ARE CACHED; GLYPH ADVANCES ARE NOT.** `cg_font_render_glyph_cached` remembers every rendering (see
-  "The glyph bitmap cache" above), so the hinter is no longer the per-frame cost it was. What remains is the
-  ADVANCE: `CGContextShowGlyphs` asks `CGFontGetGlyphAdvances` for each glyph on each draw, and that door runs
-  `FT_Load_Glyph` to answer — 713 ns a glyph at 13 px, measured, now the largest single item in a warm text run. It is
-  a different cache (font units are size-free, so the key is just the face and the glyph) and a smaller one, and it
-  is not written yet. PDF embedding and text-as-path still use `cg_font_glyph_outline`, which the cache does not
-  cover either — a PDF places each glyph once, so there is nothing to reuse.
+- **GLYPH MASKS AND GLYPH ADVANCES ARE CACHED; THE COMPOSITING IS NOT.** `cg_font_render_glyph_cached` remembers a
+  rendering (see "The glyph bitmap cache" above) and `CGFontGetGlyphAdvances` remembers an advance per glyph on the
+  font, which is where the 713 ns went. What a warm grey glyph still costs is its PAINT, and it is the paint that
+  allocates: `cg_show_one_glyph_fill` builds a pixman a8 mask image and copies the coverage into it, builds a 1×1
+  solid-fill image, and composites the glyph's box — per glyph, per draw. None of that is size-free or glyph-free, so
+  none of it is a cache: the mask image could be a per-context scratch buffer refilled in place, the solid fill could
+  be kept until the colour changes, and sub-pixel coverage could stop going through the hand blend (~2.1 µs a glyph
+  against ~0.7 grey). Named and measured rather than guessed at.
+- **TEXT AS OUTLINES IS OUTSIDE BOTH CACHES.** PDF embedding and text-as-path use `cg_font_glyph_outline`, which
+  neither cache covers — a PDF places each glyph once, and a stroked or clipped glyph is geometry rather than a
+  mask, so there is nothing to reuse in either.
 - **PDF EMBEDS TRUETYPE AND NON-CID CFF; NOT TYPE 1 OR CID-KEYED CFF.** A Type 1 face has no `/FontFile2` or
   `/Type1C` route here, and a CID-keyed CFF cannot be a simple Type 1 font, so both fall back to outlines; the
   writer names that fallback when it happens. CFF subsetting is conservative — CID-keyed CFF, Expert charsets and

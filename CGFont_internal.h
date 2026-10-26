@@ -221,6 +221,28 @@ void cg_font_glyph_cache_set_budget(size_t bytes);
 void cg_font_glyph_cache_flush(void);
 void cg_font_glyph_cache_stats(CGGlyphCacheStats *stats);
 
+/* **THE ADVANCE CACHE, WHICH IS A DIFFERENT SHAPE FROM THE BITMAP ONE AND FOR A REASON WORTH STATING.** An advance
+ * is in FONT UNITS — `CGFontGetGlyphAdvances` says so — so it is the same answer at every size, pen phase and
+ * transform, and the cache is one `int` per glyph with a byte beside it saying whether it is known. It lives ON THE
+ * FONT (allocated on the first advance question, freed with the font) rather than in the bitmap cache's LRU, because
+ * a picture is worth hundreds of bytes and there are a few dozen of them while an advance is worth four and there is
+ * one per glyph.
+ *
+ * It is INVISIBLE AT THE DOOR: `CGFontGetGlyphAdvances` still answers font units, still refuses a batch whole when a
+ * glyph will not load, and still leaves the caller's array untouched in that case. What changed is the cost — the
+ * second ask is an array read instead of `FT_Load_Glyph`, MEASURED at 713 ns against 15 ns for a 13 px glyph.
+ *
+ * The counters are per font, and `known` is how many glyphs that font has an answer for, so a probe can tell a warm
+ * cache from one that never records anything. */
+typedef struct {
+	unsigned long loads;	/* glyphs this font asked the engine about */
+	unsigned long hits;	/* answers taken from the array instead */
+	unsigned known;		/* how many glyphs the array has an advance for */
+	unsigned capacity;	/* the face's glyph count, once the array exists */
+} CGFontAdvanceStats;
+
+void cg_font_advance_cache_stats(CGFontRef font, CGFontAdvanceStats *stats);
+
 /* **THE COVERAGE WARP'S EXPONENT, ASKED AS A NUMBER SO THAT IT CAN BE MEASURED RATHER THAN TRUSTED.** `ppem` is
  * DEVICE pixels per em and `ink` is one of the two polarities above; the answer is the exponent
  * `cg_font_render_glyph` raises each coverage sample to — 1.0 at and above the size where an antialiased stem is

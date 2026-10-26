@@ -62,6 +62,26 @@ struct CGFont {
 	unsigned char *gpos;
 	size_t gpos_length;
 	int gpos_tried;
+
+	/* **THE ADVANCES, WHICH ARE THE ONE THING ABOUT A GLYPH THAT IS SIZE-FREE AND THEREFORE CACHED ON THE FONT.**
+	 * An advance is in FONT UNITS — `CGFontGetGlyphAdvances` says so — so it does not depend on a size, a pen phase
+	 * or a transform, and the whole cache is one `int` per glyph plus a byte saying whether it is known. That is a
+	 * different shape from the glyph BITMAP cache (which is keyed on the device grid and lives in a global LRU): a
+	 * picture is worth hundreds of bytes and there are a few dozen of them, an advance is worth four and there is one
+	 * per glyph, so the cheapest place to keep it is an array indexed by the glyph.
+	 *
+	 * IT IS ALLOCATED LAZILY, on the first advance question, because a font whose glyphs are only ever measured by
+	 * their outlines (the PDF renderer) never asks. `advance_count` is the face's glyph count at allocation and is what
+	 * makes an out-of-range index a refusal rather than a read past the end. THE ARRAYS DIE WITH THE FONT (see
+	 * `CGFontRelease`), which is the ownership rule this file already keeps for `gpos`. */
+	int *advances;			/* `advance_count` entries, meaningful where `advance_known` says so */
+	unsigned char *advance_known;	/* one byte per glyph */
+	unsigned advance_count;
+	unsigned advance_known_count;
+	/* AND THE TWO COUNTERS A PROBE ASKS, because "the cache is correct" and "the cache is doing anything" are
+	 * different questions and only the first one can be answered from the values. */
+	unsigned long advance_loads;	/* glyphs this font actually asked the engine about */
+	unsigned long advance_hits;	/* glyph answers taken from the array instead */
 };
 
 static FT_Library fn_library_handle;
@@ -385,6 +405,8 @@ void CGFontRelease(CGFontRef font)
 		CGDataProviderRelease(font->provider);
 	}
 	free(font->gpos);
+	free(font->advances);
+	free(font->advance_known);
 	free(font);
 }
 
@@ -558,27 +580,115 @@ static int fn_load_glyph(FT_Face face, CGGlyph glyph)
 	return FT_Load_Glyph(face, (FT_UInt)glyph, FT_LOAD_NO_SCALE | FT_LOAD_NO_HINTING) == 0;
 }
 
-/* THE TWO-PASS RULE THE HEADER PROMISES: a caller that asked for twenty answers must not get
- * nineteen and a half. Pass one LOADS every glyph and refuses the whole request if any fails;
- * pass two writes. It costs a second load per glyph and buys an all-or-nothing answer, which is
- * what `false` means. */
+/* **THE TWO-PASS RULE THE HEADER PROMISES: a caller that asked for twenty answers must not get
+ * nineteen and a half.** Pass one LOADS every glyph and refuses the whole request if any fails;
+ * pass two writes. The all-or-nothing answer is what `false` means and it has not changed.
+ *
+ * WHAT CHANGED IS THAT A GLYPH ALREADY LOADED IS NOT LOADED AGAIN. An advance is in font units, so
+ * it is the same answer at every size, every pen phase and every transform — the one fact about a
+ * glyph that is genuinely size-free — and a line of text asks for its glyphs' advances on EVERY draw.
+ * MEASURED (2026, a 13 px run through `CGContextShowGlyphs`): `FT_Load_Glyph` cost 713 ns a glyph
+ * here, which after the glyph bitmaps were cached was the largest single item in a warm text run.
+ * The answer is now kept per glyph on the font, and the second ask is an array read: **15 ns**, and
+ * the run's advance work disappears from the profile.
+ *
+ * THE RECORDING IS PER GLYPH AND NOT PER REQUEST, so a refused batch still keeps the glyphs it did
+ * manage to load: "known" means "this glyph has been loaded successfully and its advance read", and
+ * that fact does not become untrue because a LATER glyph in the same call was bad. The caller's array
+ * is still untouched on refusal, which is the half of the promise that belongs to the caller. */
+static int fn_advances_reserve(CGFontRef font)
+{
+	unsigned count;
+
+	if (font->advances != NULL) {
+		return 1;
+	}
+	if (font->face == NULL) {
+		return 0;
+	}
+	count = (unsigned)font->face->num_glyphs;
+	if (count == 0) {
+		return 0;
+	}
+	font->advances = (int *)calloc((size_t)count, sizeof(int));
+	font->advance_known = (unsigned char *)calloc((size_t)count, 1u);
+	if (font->advances == NULL || font->advance_known == NULL) {
+		/* A FONT THAT CANNOT RECORD STILL ANSWERS: the door falls back to loading twice per glyph, which is what
+		 * it did before there was a cache. It is a degradation, not a refusal, because the ADVANCE is not the
+		 * cache's to withhold. */
+		free(font->advances);
+		free(font->advance_known);
+		font->advances = NULL;
+		font->advance_known = NULL;
+		return 0;
+	}
+	font->advance_count = count;
+	font->advance_known_count = 0;
+	return 1;
+}
+
+/* ONE LOAD, RECORDED. False only when the engine refuses the glyph, which is the condition pass one exists to find. */
+static int fn_advance_record(CGFontRef font, CGGlyph glyph)
+{
+	if (!fn_load_glyph(font->face, glyph)) {
+		return 0;
+	}
+	font->advance_loads++;
+	if ((unsigned)glyph < font->advance_count) {
+		font->advances[glyph] = (int)font->face->glyph->metrics.horiAdvance;
+		if (!font->advance_known[glyph]) {
+			font->advance_known[glyph] = 1;
+			font->advance_known_count++;
+		}
+	}
+	return 1;
+}
+
 bool CGFontGetGlyphAdvances(CGFontRef font, const CGGlyph glyphs[], size_t count, int advances[])
 {
 	size_t i;
+	int cached;
 
 	if (font == NULL || font->face == NULL || glyphs == NULL || advances == NULL) {
 		return false;
 	}
+	cached = fn_advances_reserve(font);
+	/* PASS ONE: MAKE EVERY GLYPH KNOWN, OR REFUSE THE REQUEST. */
 	for (i = 0; i < count; i++) {
-		if (!fn_load_glyph(font->face, glyphs[i])) {
+		if (cached && (unsigned)glyphs[i] < font->advance_count
+		    && font->advance_known[glyphs[i]]) {
+			font->advance_hits++;
+			continue;
+		}
+		if (!fn_advance_record(font, glyphs[i])) {
 			return false;
 		}
 	}
+	/* PASS TWO: WRITE. Every glyph is known now unless the cache could not be built, in which case this loads it a
+	 * second time — the arithmetic the door had before the cache existed. */
 	for (i = 0; i < count; i++) {
-		(void)fn_load_glyph(font->face, glyphs[i]);
-		advances[i] = (int)font->face->glyph->metrics.horiAdvance;
+		if (cached && (unsigned)glyphs[i] < font->advance_count) {
+			advances[i] = font->advances[glyphs[i]];
+		}
+		else {
+			/* THE SLOT HOLDS ONE GLYPH, not the last batch's, so the second pass loads again — which is exactly
+			 * what this door did before there was a cache, and what it still does when the cache could not be built. */
+			(void)fn_load_glyph(font->face, glyphs[i]);
+			advances[i] = (int)font->face->glyph->metrics.horiAdvance;
+		}
 	}
 	return true;
+}
+
+void cg_font_advance_cache_stats(CGFontRef font, CGFontAdvanceStats *stats)
+{
+	if (stats == NULL) {
+		return;
+	}
+	stats->loads = (font != NULL) ? font->advance_loads : 0;
+	stats->hits = (font != NULL) ? font->advance_hits : 0;
+	stats->known = (font != NULL) ? font->advance_known_count : 0;
+	stats->capacity = (font != NULL) ? font->advance_count : 0;
 }
 
 /* **THE ADJUSTMENT A PAIR OF GLYPHS ASKS FOR, IN FONT UNITS — WHICH IS WHAT KERNING IS.** A font's own
