@@ -40,6 +40,42 @@ The set installs under `<prefix>/share/fonts/agora` and is **the first directory
 name is absent, so a real Helvetica on the host still wins. Every family carries its upstream licence; the
 three static instances and the families that reserve a name are recorded in `fonts/PROVENANCE.md`.
 
+## The glyph bitmap cache
+
+**A RASTERISED GLYPH IS REMEMBERED, BECAUSE ASKING FOR ONE IS A TRIP THROUGH THE HINTER AND A PAGE ASKS FIFTY TIMES.**
+`cg_font_render_glyph` sets the face size, loads the outline, rasterises and warps every coverage sample — per call.
+`cg_font_render_glyph_cached` (in `CGFont_internal.h`) answers the same picture from a cache, and every
+FILLED-text door goes through it (`CGContextShowGlyphs`, `ShowGlyphsAtPoint`, `ShowGlyphsAtPositions`, `ShowText`,
+`ShowTextAtPoint`); the stroke and clip text modes draw outlines and so are not mask work at all.
+
+- **The key is the engine's own input in the engine's own precision**: the face, the glyph, the 26.6 device size
+  (`FT_Set_Char_Size`'s argument and not the point size it came from), the four 16.16 transform factors, the two
+  26.6 subpixel deltas, whether coverage was smoothed, and the ink polarity. Everything else the rasteriser reads
+  (`mirror`, `plain`, the LCD filter, whether the warp applies) is a function of those, so it is not keyed.
+- **The entry retains the `CGFontRef`.** The struct is a heap block, so a released face and a new one can share an
+  address; holding a reference is what makes the pointer an identity. A font whose last caller lets go stays alive
+  until its entries are evicted — bounded by the budget, and the price of a key that cannot alias.
+- **4 MiB and 4096 entries by default**, evicted least-recently-used (found by scan, because the scan only happens
+  when the budget is already full). `CG_GLYPH_CACHE_BYTES=<n>` overrides it; `0` turns caching off without breaking
+  the borrow contract — every rendering then lives in a one-slot holder that the next call drops.
+- **The door returns a BORROWED pointer.** The bytes belong to the cache and are valid until the next call into it,
+  which is exactly a drawing pass: every consumer runs before the next glyph is asked for. The allocating door is
+  still there for a caller that needs to own its buffer.
+- **Unsynchronised, like the rest of this file.** `FT_Set_Char_Size` and `FT_Set_Transform` are already face-wide
+  state written per glyph, so two threads drawing at once was a race before the cache and is not a new one.
+
+MEASURED (2026, `tests/glyph_cache.c` and a direct clock on the door): a 13 px `A` with a quarter-pixel pen costs
+**3.17 µs rendered and 51 ns remembered** — 62× — and a 47-character run through `CGContextShowTextAtPoint` is
+**4.2× faster** (79 ms against 19 ms for 200 drawings, the cold loop flushing before every one). The suite proves a hit answers the miss's bytes and metrics over a
+sweep of size, phase, transform, smoothing and ink; that the budget at zero renders the same pixels end to end
+through `CGContextShowTextAtPoint`; that an evicted entry re-renders identically rather than being remembered wrong;
+and that a released face and a fresh one do not share an entry.
+
+**WHAT THE CACHE DOES NOT FIX, MEASURED THE SAME DAY.** A glyph's *advance* is asked of the engine per glyph per
+draw (`cg_glyph_advance` → `CGFontGetGlyphAdvances` → `FT_Load_Glyph`, 713 ns at 13 px), so a warm 47-character run
+costs ~1.9 µs a glyph of which the rasteriser is now the smaller part. That is the next cache worth writing, and it
+is named in "What is not done" rather than left to be rediscovered.
+
 ## Status
 
 **AND A PDF READER IS HERE: THE DOCUMENT, THE PAGE TREE, THE OBJECTS AND THE CONTENT STREAM.** It is the G2 reader
@@ -161,10 +197,60 @@ been converted back to CF", with lcms2 "not installed on this machine").
   and this file divided it by three, which put every smoothed glyph's samples in a different sub-column for every
   phase and made the ink JUMP four tenths of a pixel as the pen moved — a wobble in the spacing of every line on
   the desktop. `tests/drawing.c` asks it of both renderings, because a check that asked only about grey would be
-  asking about a path a person does not see.
+  asking about a path a person does not see. Those numbers are measured with the quantisation doors CLOSED, which is
+  the honest way to ask the question — see the entry below for the snapping that is on by default.
+
+- **AND THE SIZE A GLYPH IS RASTERISED AT IS A DEVICE SIZE, WHICH IS WHAT MAKES A SCALED DESKTOP SHARP RATHER THAN
+  MERELY THE RIGHT SIZE.** A font size is in points and the CTM is what turns points into pixels, but the rasteriser
+  used to hand the point size to the engine as its hinting grid and the CTM as a TRANSFORM — which FreeType applies
+  *after* hinting, in its own words: "hinting is unaltered by the transformation and is performed on the character
+  size given in the last call to `FT_Set_Char_Size`". So every non-1.0 output was hinted for a grid that is not on
+  the screen. MEASURED (Inter `H` at 13 points on a 2x output): a 16x22 bitmap where a real 26-px em is 16x20, nine
+  per cent more ink, every stem a 13-px decision doubled; at the 96-dpi X11 head's 1.33203125 it was 12.3% heavy and
+  a row too tall. The scale is now DIVIDED OUT of the transform and multiplied into the em, so the transform that
+  reaches the engine is a rotation and/or shear and nothing else — and the property is a test rather than a claim:
+  the same glyph drawn at the same DEVICE size, once with the size in the font and once with it in the CTM, must be
+  the same picture, to a per cent and to the row.
+
+- **AND SMALL TEXT IS NOT MERELY SMALLER: TWO SIZE POLICIES, BOTH OF THEM MEASURED.** A stem narrower than a pixel
+  has no fully-covered pixel in it, so at this machine's 0.8046875 scale a 13-point stem is 0.85 of a device pixel
+  and the eye reads it lighter than the same design at a pixel and a half. No hinting policy can fix that — 0.85 px
+  of ink snapped to the grid is still 0.85 px — so the rasteriser applies a **coverage warp** below 16 px per em:
+  each coverage sample is raised to an exponent that goes to 1.0 at the threshold and strengthens to a floor at
+  8 px, with a stronger curve for light ink on a dark ground (which blooms, and so reads thinner still). It is
+  applied to the MASK, once, because grey coverage goes to pixman and sub-pixel coverage to a hand blend and a warp
+  at either would leave the other out. MEASURED, a ten-letter word at 13 points: at 0.8046875 it weighs 1.009 of
+  the same word on a whole-pixel desktop in grey and 0.994 in colour (1.042 and 1.022 with the ink light on a dark
+  ground, where the curve is stronger), against **0.954 and 0.948 with the warp turned off** — which is the thinning
+  it exists to undo, and the test's floor sits above those numbers rather than above zero.
+  Beside it, the **LCD filter is chosen by size**: the engine's five-tap FIR is the right convolution of a
+  monitor's phosphors, but at ten pixels an em it takes a third of the peak coverage off a stem (MEASURED, Inter
+  `l`: 206 against 218 through the three-tap at 10.46 px, 171 against 179 at 8 px, and three samples narrower), so
+  below 14 px the three-tap is used. And a small GREY glyph is loaded with `FT_LOAD_TARGET_LIGHT`: full hinting
+  grid-fits a stem's horizontal edges as well as its vertical ones, and the ADVANCES here are Core Text's own and
+  unhinted, so a fully hinted outline on an unhinted advance is a glyph moved inside its own advance — invisible at
+  26 px, uneven rhythm at 10.
+
+- **AND QUANTISATION IS IMPLEMENTED RATHER THAN REFUSED, WHICH IS WHAT "A CONTEXT QUANTIZES SUBPIXEL POSITIONS"
+  NEEDED.** The two doors used to refuse by name, on the grounds that the 10.6 header never says TO WHAT; what the
+  refusal cost was the reason quantisation exists — a mask that can be reused, and a stem that stays where it was.
+  The quantum is a THIRD of a pixel for sub-pixel coverage (a third IS a sub-column, so a fraction between two of
+  them has nowhere to land) and a QUARTER for grey (no sub-columns, and a quarter is the finest step that still
+  repeats), and both doors default ON, as they do on the system this library duplicates. The whole part and the
+  fraction are read from the same snapped value, so they cannot disagree, and closing either door restores the exact
+  fraction. The case that measures the pen's travel now asks BOTH questions: with the doors closed a quarter-pixel
+  step still moves the ink a quarter, and with them open a pen at 10.25 must land exactly where a pen at 10 + 1/3
+  lands — an equality, because that IS what snapping means.
 
 ### What is not done
 
+- **GLYPH MASKS ARE CACHED; GLYPH ADVANCES ARE NOT.** `cg_font_render_glyph_cached` remembers every rendering (see
+  "The glyph bitmap cache" above), so the hinter is no longer the per-frame cost it was. What remains is the
+  ADVANCE: `CGContextShowGlyphs` asks `CGFontGetGlyphAdvances` for each glyph on each draw, and that door runs
+  `FT_Load_Glyph` to answer — 713 ns a glyph at 13 px, measured, now the largest single item in a warm text run. It is
+  a different cache (font units are size-free, so the key is just the face and the glyph) and a smaller one, and it
+  is not written yet. PDF embedding and text-as-path still use `cg_font_glyph_outline`, which the cache does not
+  cover either — a PDF places each glyph once, so there is nothing to reuse.
 - **PDF EMBEDS TRUETYPE AND NON-CID CFF; NOT TYPE 1 OR CID-KEYED CFF.** A Type 1 face has no `/FontFile2` or
   `/Type1C` route here, and a CID-keyed CFF cannot be a simple Type 1 font, so both fall back to outlines; the
   writer names that fallback when it happens. CFF subsetting is conservative — CID-keyed CFF, Expert charsets and

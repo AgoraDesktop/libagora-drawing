@@ -2229,6 +2229,47 @@ static double fn_surface_centroid(CGContextRef c)
 	return mass > 0.0 ? moment / mass : 0.0;
 }
 
+/* ONE DRAW OF ONE GLYPH AT ONE PEN, reduced to where its ink's centre of mass landed. Every knob this case asks
+ * about is an argument, so the four renderings differ in nothing else. */
+static double fn_pen_centroid(CGFontRef font, CGGlyph glyph, double x, int smoothing, int quantisation)
+{
+	CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+	unsigned char *px = (unsigned char *)calloc(64u * 48u, 4u);
+	CGContextRef ctx;
+	double at = 0.0;
+
+	/* **WHITE, BECAUSE AN OPAQUE DESTINATION IS NOT HANDED A COLOUR** — `x` formats have none, and a buffer left
+	 * as zeros is not "empty", it is black, which is why the first version of this measured every pen position
+	 * as the bitmap's own centre. */
+	if (px != NULL) {
+		memset(px, 0xFF, 64u * 48u * 4u);
+	}
+	ctx = (px != NULL) ? CGBitmapContextCreate(px, 64, 48, 8, 64 * 4, rgb,
+						   (uint32_t)(kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little))
+			   : NULL;
+	if (ctx != NULL) {
+		CGContextSetShouldSmoothFonts(ctx, smoothing ? true : false);
+		CGContextSetAllowsFontSubpixelQuantization(ctx, quantisation ? true : false);
+		CGContextSetShouldSubpixelQuantizeFonts(ctx, quantisation ? true : false);
+		CGContextSetRGBFillColor(ctx, 0.0, 0.0, 0.0, 1.0);
+		CGContextSetFont(ctx, font);
+		CGContextSetFontSize(ctx, 26.0);
+		CGContextSetTextMatrix(ctx, CGAffineTransformIdentity);
+		CGContextShowGlyphsAtPoint(ctx, x, 30.0, &glyph, 1);
+		at = fn_surface_centroid(ctx);
+		CGContextRelease(ctx);
+	}
+	free(px);
+	CGColorSpaceRelease(rgb);
+	return at;
+}
+
+/* **AND THE SECOND QUESTION IS WHAT QUANTISATION DOES TO THAT FRACTION.** The two doors are on by default, so a pen
+ * is snapped before it is used — to a third of a pixel for sub-pixel coverage, where a third IS a sub-column, and
+ * to a quarter for grey, where there are no sub-columns and a quarter is the finest repeating step. THE CHECK IS AN
+ * EQUALITY RATHER THAN A BAND: a pen at 10.25 with the doors open must land where a pen at 10 + 1/3 with them shut
+ * lands, because that is the whole statement — the quantised pen IS the snapped pen, and the snapping is what makes
+ * the mask repeatable. */
 static int case_subpixel_positioning(void)
 {
 	int before = g_fail;
@@ -2257,51 +2298,374 @@ static int case_subpixel_positioning(void)
 		return g_fail - before;
 	}
 	for (smoothing = 0; smoothing < 2; smoothing++) {
+		const char *name = smoothing ? "smoothed" : "grey";
+		double quantum = smoothing ? 3.0 : 4.0;
 		double at[5];
 		int i;
 
 		for (i = 0; i < 5; i++) {
-			unsigned char *px = (unsigned char *)calloc(64u * 48u, 4u);
-			CGContextRef ctx = (px != NULL)
-				? CGBitmapContextCreate(px, 64, 48, 8, 64 * 4, rgb,
-							(uint32_t)(kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little))
-				: NULL;
-
-			/* **WHITE, BECAUSE AN OPAQUE DESTINATION IS NOT HANDED A COLOUR** — `x` formats have none, and a
-			 * buffer left as zeros is not "empty", it is black, which is why the first version of this measured
-			 * every pen position as the bitmap's own centre. */
-			if (ctx != NULL) {
-				memset(px, 0xFF, 64u * 48u * 4u);
-			}
-
-			if (ctx == NULL) {
-				free(px);
-				at[i] = 0.0;
-				continue;
-			}
-			CGContextSetShouldSmoothFonts(ctx, smoothing ? true : false);
-			CGContextSetRGBFillColor(ctx, 0.0, 0.0, 0.0, 1.0);
-			CGContextSetFont(ctx, font);
-			CGContextSetFontSize(ctx, 26.0);
-			CGContextSetTextMatrix(ctx, CGAffineTransformIdentity);
-			CGContextShowGlyphsAtPoint(ctx, 10.0 + 0.25 * (double)i, 30.0, &glyph, 1);
-			at[i] = fn_surface_centroid(ctx);
-			CGContextRelease(ctx);
-			free(px);
+			at[i] = fn_pen_centroid(font, glyph, 10.0 + 0.25 * (double)i, smoothing, 0);
 		}
-		printf("  (%s: the pen at 10.00/10.25/10.50/10.75/11.00 puts the ink at %.3f/%.3f/%.3f/%.3f/%.3f)\n",
-		       smoothing ? "SMOOTHED" : "grey    ", at[0], at[1], at[2], at[3], at[4]);
+		printf("  (%s, exact: the pen at 10.00/10.25/10.50/10.75/11.00 puts the ink at "
+		       "%.3f/%.3f/%.3f/%.3f/%.3f)\n",
+		       name, at[0], at[1], at[2], at[3], at[4]);
 		for (i = 1; i < 5; i++) {
 			check(at[i] - at[i - 1] > 0.05 && at[i] - at[i - 1] < 0.45,
 			      "the %s pen's quarter-pixel step %d moved the ink by %.3f, want about a quarter",
-			      smoothing ? "smoothed" : "grey", i, at[i] - at[i - 1]);
+			      name, i, at[i] - at[i - 1]);
 		}
 		check(at[4] - at[0] > 0.6 && at[4] - at[0] < 1.4,
-		      "the %s ink moved %.3f over a WHOLE pixel of pen travel", smoothing ? "smoothed" : "grey",
-		      at[4] - at[0]);
+		      "the %s ink moved %.3f over a WHOLE pixel of pen travel", name, at[4] - at[0]);
+
+		/* THE SAME PEN WITH THE DOORS OPEN, against the pen it should have become. A quarter of a pixel is on the
+		 * grey quantum's grid and OFF the smoothed one's — which is the point of the two numbers — so the grey
+		 * comparison is the same pen and the smoothed comparison is 10 + 1/3. */
+		{
+			double open = fn_pen_centroid(font, glyph, 10.25, smoothing, 1);
+			double snapped = fn_pen_centroid(font, glyph,
+							 10.0 + (smoothing ? 1.0 / 3.0 : 0.25), smoothing, 0);
+			double moved = open >= at[0] ? open - at[0] : at[0] - open;
+
+			printf("  (%s, quantised: a pen at 10.25 lands at %.3f; the pen at 10 + 1/%.0f lands at %.3f; "
+			       "the quantum moved it %.3f of a pixel)\n",
+			       name, open, quantum, snapped, moved);
+			check(open - snapped < 0.02 && snapped - open < 0.02,
+			      "the quantised %s pen at 10.25 landed %.3f away from where 10 + 1/%.0f lands — "
+			      "quantisation is not snapping to its own grid", open - snapped, quantum);
+			check(moved <= 1.0 / quantum + 0.01,
+			      "quantisation moved the %s pen %.3f, which is more than one quantum of 1/%.0f",
+			      name, moved, quantum);
+		}
+		/* AND CLOSING EITHER DOOR RESTORES THE EXACT FRACTION — the `Allows` one here, because it lives on the
+		 * context and the state's twin is already exercised by Save/Restore elsewhere. */
+		{
+			double exact = fn_pen_centroid(font, glyph, 10.25, smoothing, 0);
+
+			check(exact >= at[1] - 0.02 && exact <= at[1] + 0.02,
+			      "with quantisation off the %s pen at 10.25 landed %.3f, not where the exact run put it "
+			      "(%.3f)", name, exact, at[1]);
+		}
 	}
 	CGFontRelease(font);
 	CGDataProviderRelease(provider);
+	return g_fail - before;
+}
+
+
+/* ============================================================================================ *
+ * THE SIZE A GLYPH IS RASTERISED AT IS A DEVICE SIZE, NOT A FONT SIZE.                            *
+ *                                                                                                *
+ * **THE PROPERTY IS SCALE INVARIANCE, AND IT IS ASKED OF THE TWO PATHS THAT MUST AGREE.** A font  *
+ * size is in points; the CTM is what turns points into pixels; and the rasteriser must be handed a *
+ * count of device pixels per em or it hints stems against a grid that does not exist on the        *
+ * screen. The way to say that without naming an implementation is: DRAW THE SAME GLYPH AT THE     *
+ * SAME DEVICE SIZE TWO WAYS — once with the size in the font and the CTM untouched, once with the *
+ * size scaled down in the font and the CTM scaled up to match — and require the two pictures to be  *
+ * the same picture.                                                                              *
+ *                                                                                                *
+ * IT WAS NOT, AND THAT IS WHY THIS CASE EXISTS. The rasteriser used to take the point size as its *
+ * hinting grid and hand the CTM to the engine as a TRANSFORM, which FreeType applies after        *
+ * hinting: MEASURED on Inter's `H` at 13 points on a 2x output, that put down a 16x22 bitmap where *
+ * a real 26-px em is 16x20, with nine per cent more ink — every stem a 13-px decision doubled. At  *
+ * the 57.97-dpi session's 0.8046875 the same arithmetic rasterised a 13-px grid and shrank it,     *
+ * giving 42 inked pixels where the device ppem gives 35.                                           *
+ * ============================================================================================ */
+struct fn_ink_box {
+	double mass;	/* sum of the coverage over the surface, so a partial pixel counts partially */
+	int ink;	/* how many pixels carry any of it */
+	int x0, y0, x1, y1;	/* the inverse-exclusive box of those pixels */
+};
+
+/* ONE GLYPH INTO ONE SURFACE, with the CTM scaled by `scale` and the size by 1/`scale` — so the glyph's
+ * DEVICE size is the same in every run and only the arithmetic that produced it differs. */
+static int fn_glyph_box(CGFontRef font, CGGlyph glyph, double size, double scale, struct fn_ink_box *box)
+{
+	CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+	const int side = 160;
+	unsigned char *px = (unsigned char *)calloc((size_t)side * (size_t)side, 4u);
+	CGContextRef ctx;
+	int x, y;
+
+	memset(box, 0, sizeof *box);
+	box->x0 = box->y0 = side;
+	box->x1 = box->y1 = -1;
+	if (px != NULL) {
+		memset(px, 0xFF, (size_t)side * (size_t)side * 4u);
+	}
+	ctx = (px != NULL) ? CGBitmapContextCreate(px, (size_t)side, (size_t)side, 8, (size_t)side * 4u, rgb,
+						   (uint32_t)(kCGImageAlphaNoneSkipFirst
+							      | kCGBitmapByteOrder32Little))
+			   : NULL;
+	if (ctx == NULL) {
+		free(px);
+		CGColorSpaceRelease(rgb);
+		return 0;
+	}
+	/* GREY COVERAGE, because this is a question about the GRID and not about sub-pixel coverage — and
+	 * because the grey path is the one whose mask goes to pixman. */
+	CGContextSetShouldSmoothFonts(ctx, false);
+	CGContextSetRGBFillColor(ctx, 0.0, 0.0, 0.0, 1.0);
+	CGContextSetFont(ctx, font);
+	CGContextSetFontSize(ctx, (CGFloat)(size / scale));
+	CGContextSetTextMatrix(ctx, CGAffineTransformIdentity);
+	CGContextScaleCTM(ctx, (CGFloat)scale, (CGFloat)scale);
+	/* THE PEN IS CHOSEN SO THAT THE DEVICE PEN IS A WHOLE PIXEL IN EVERY RUN, so that no run is measuring a
+	 * sub-pixel phase the others do not have. */
+	CGContextShowGlyphsAtPoint(ctx, (CGFloat)(20.0 / scale), (CGFloat)(80.0 / scale), &glyph, 1);
+	for (y = 0; y < side; y++) {
+		for (x = 0; x < side; x++) {
+			const unsigned char *p = px + ((size_t)y * (size_t)side + (size_t)x) * 4u;
+			double darkness = 255.0 - ((double)p[0] + (double)p[1] + (double)p[2]) / 3.0;
+
+			if (darkness <= 0.0) {
+				continue;
+			}
+			box->mass += darkness;
+			box->ink++;
+			if (x < box->x0) {
+				box->x0 = x;
+			}
+			if (y < box->y0) {
+				box->y0 = y;
+			}
+			if (x > box->x1) {
+				box->x1 = x;
+			}
+			if (y > box->y1) {
+				box->y1 = y;
+			}
+		}
+	}
+	CGContextRelease(ctx);
+	free(px);
+	CGColorSpaceRelease(rgb);
+	return 1;
+}
+
+static int case_text_device_ppem(void)
+{
+	int before = g_fail;
+	const char *path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
+	CGDataProviderRef provider;
+	CGFontRef font;
+	CGGlyph glyph = 0;
+	UniChar h = 'H';
+	const double scales[3] = { 2.0, 0.8046875, 1.33203125 };
+	size_t i;
+
+	if (access(path, R_OK) != 0) {
+		printf("  (not run: %s is not on this machine)\n", path);
+		return g_fail - before;
+	}
+	provider = CGDataProviderCreateWithFilename(path);
+	font = (provider != NULL) ? CGFontCreateWithDataProvider(provider) : NULL;
+	check(font != NULL, "the face could not be opened");
+	if (font == NULL) {
+		return g_fail - before;
+	}
+	if (!cg_font_glyphs_for_unichars(font, &h, &glyph, 1)) {
+		printf("  (not run: the face has no glyph for 'H')\n");
+		CGFontRelease(font);
+		CGDataProviderRelease(provider);
+		return g_fail - before;
+	}
+	/* THE SIZE IS THE SAME ON THE SCREEN IN EVERY RUN — 26 DEVICE PIXELS PER EM — and only the split between the
+	 * font's size and the CTM changes. The first entry is the 2x desktop, the second is this machine's 57.97-dpi
+	 * session, the third is the 96-dpi X11 head; a fourth would be more of the same. */
+	for (i = 0; i < sizeof scales / sizeof scales[0]; i++) {
+		struct fn_ink_box scaled, plain;
+		double ratio;
+
+		if (!fn_glyph_box(font, glyph, 26.0, 1.0, &plain)
+		    || !fn_glyph_box(font, glyph, 26.0, scales[i], &scaled)) {
+			check(0, "the size %.4f could not be drawn", scales[i]);
+			continue;
+		}
+		ratio = plain.mass > 0.0 ? scaled.mass / plain.mass : 0.0;
+		printf("  (scale %.7f: %dx%d of ink at %.0f mass against %dx%d at %.0f — ratio %.3f)\n",
+		       scales[i], scaled.x1 - scaled.x0 + 1, scaled.y1 - scaled.y0 + 1, scaled.mass,
+		       plain.x1 - plain.x0 + 1, plain.y1 - plain.y0 + 1, plain.mass, ratio);
+		/* 1. THE SAME DEVICE SIZE PUTS DOWN THE SAME INK. A per-cent of slack, because a hinting grid built from
+		 * a 26.6 size and a scale built from a double are allowed to differ in the last place — nine per cent,
+		 * which is what the old arithmetic measured, is not. */
+		check(ratio > 0.97 && ratio < 1.03,
+		      "at scale %.7f the ink weighs %.1f%% of the same glyph drawn at the same DEVICE size",
+		      scales[i], 100.0 * (ratio - 1.0) + 100.0);
+		/* 2. AND IT IS THE SAME SHAPE. The bitmap's height is the sharpest statement of it: a glyph hinted on a
+		 * grid twice the size of the one it is drawn on comes back a different number of ROWS. */
+		check(scaled.y1 - scaled.y0 == plain.y1 - plain.y0,
+		      "at scale %.7f the glyph is %d rows tall against %d at the same device size", scales[i],
+		      scaled.y1 - scaled.y0 + 1, plain.y1 - plain.y0 + 1);
+		check(scaled.x1 - scaled.x0 == plain.x1 - plain.x0,
+		      "at scale %.7f the glyph is %d columns wide against %d at the same device size",
+		      scales[i], scaled.x1 - scaled.x0 + 1, plain.x1 - plain.x0 + 1);
+	}
+	CGFontRelease(font);
+	CGDataProviderRelease(provider);
+	return g_fail - before;
+}
+
+/* ============================================================================================ *
+ * SMALL TEXT ON A SMALL GRID: THE COVERAGE WARP, AND WHY ITS CURVE HAS THAT SHAPE.                *
+ *                                                                                                *
+ * **A STEM NARROWER THAN A PIXEL HAS NO FULLY-COVERED PIXEL IN IT, AND THAT IS ALL IT IS.** At  *
+ * this machine's 0.8046875 scale a 13-point stem is 0.85 of a device pixel, so every pixel it     *
+ * touches is a partial one and the eye reads the stroke as lighter than the same design drawn a   *
+ * pixel and a half wide. No hinting policy can fix that — a 0.85-px stem snapped to the grid is    *
+ * still 0.85 px of ink — so the fix is the coverage curve the rasteriser applies (`cg_font_       *
+ * coverage_warp`), and this case measures both halves of it: THE SHAPE OF THE CURVE, exactly, and  *
+ * THE WEIGHT IT PUTS ON THE SCREEN, as a band.                                                   *
+ * ============================================================================================ */
+/* ONE WORD ON ONE GROUND, reduced to the MEAN COVERAGE OF AN INKED PIXEL — the weight of a stroke, which is what
+ * a person judges and what the warp moves. `dark` states the polarity, and it decides both the ground (light ink
+ * needs a dark one to be visible at all) and the sign of the reading: coverage is "how much ink", so a white word on
+ * black is measured by how LIGHT its pixels are, not how dark. */
+static double fn_word_weight(CGFontRef font, const char *word, double size, double scale, int smoothing,
+			     int dark, int *inked)
+{
+	CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+	const int side = 420;
+	unsigned char *px = (unsigned char *)calloc((size_t)side * (size_t)side, 4u);
+	CGContextRef ctx;
+	double mass = 0.0;
+	int ink = 0;
+	int x, y;
+
+	*inked = 0;
+	if (px == NULL) {
+		CGColorSpaceRelease(rgb);
+		return 0.0;
+	}
+	/* THE GROUND IS THE POLARITY'S OWN: a dark word needs a light ground and a light one needs a dark ground,
+	 * and the fourth byte is not written by an `x` destination, so zeroing it on a black ground is not
+	 * transparency. */
+	memset(px, dark ? 0xFF : 0x00, (size_t)side * (size_t)side * 4u);
+	ctx = CGBitmapContextCreate(px, (size_t)side, (size_t)side, 8, (size_t)side * 4u, rgb,
+				    (uint32_t)(kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little));
+	if (ctx == NULL) {
+		free(px);
+		CGColorSpaceRelease(rgb);
+		return 0.0;
+	}
+	CGContextSetShouldSmoothFonts(ctx, smoothing ? true : false);
+	if (dark) {
+		CGContextSetRGBFillColor(ctx, 0.0, 0.0, 0.0, 1.0);
+	} else {
+		CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 1.0);
+	}
+	CGContextSetFont(ctx, font);
+	CGContextSetFontSize(ctx, (CGFloat)size);
+	CGContextSetTextMatrix(ctx, CGAffineTransformIdentity);
+	CGContextScaleCTM(ctx, (CGFloat)scale, (CGFloat)scale);
+	CGContextShowTextAtPoint(ctx, (CGFloat)(10.0 / scale), (CGFloat)(60.0 / scale), word, strlen(word));
+	for (y = 0; y < side; y++) {
+		for (x = 0; x < side; x++) {
+			const unsigned char *p = px + ((size_t)y * (size_t)side + (size_t)x) * 4u;
+			double mean = ((double)p[0] + (double)p[1] + (double)p[2]) / 3.0;
+			double coverage = dark ? 255.0 - mean : mean;
+
+			if (coverage <= 0.0) {
+				continue;
+			}
+			mass += coverage;
+			ink++;
+		}
+	}
+	*inked = ink;
+	CGContextRelease(ctx);
+	free(px);
+	CGColorSpaceRelease(rgb);
+	return ink > 0 ? mass / (double)ink : 0.0;
+}
+
+static int case_text_low_dpi(void)
+{
+	int before = g_fail;
+	const char *path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
+	const char *word = "Hamburgefons";
+	CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+	CGDataProviderRef provider;
+	CGFontRef font;
+	int g;
+
+	/* 1. THE CURVE'S SHAPE, WHICH IS EXACT AND DOES NOT NEED A RENDERER. No warp where a stem is two pixels wide,
+	 * full warp at the smallest size a window sets, and monotone in between — for BOTH polarities, because the
+	 * exponent moves COVERAGE and not darkness, and a light stroke on a dark ground reads thinner than the same
+	 * coverage of dark ink. That is why the light curve is the stronger one, and it is why the second inequality
+	 * below is a strict one. */
+	check(cg_font_coverage_warp(26.0, CG_FONT_INK_DARK) == 1.0,
+	      "26 px should not be warped at all (%.3f)", cg_font_coverage_warp(26.0, CG_FONT_INK_DARK));
+	check(cg_font_coverage_warp(16.0, CG_FONT_INK_DARK) == 1.0,
+	      "16 px is the threshold and should be the identity (%.3f)",
+	      cg_font_coverage_warp(16.0, CG_FONT_INK_DARK));
+	check(cg_font_coverage_warp(8.0, CG_FONT_INK_DARK) < 1.0,
+	      "8 px should be warped (%.3f)", cg_font_coverage_warp(8.0, CG_FONT_INK_DARK));
+	check(cg_font_coverage_warp(4.0, CG_FONT_INK_DARK) == cg_font_coverage_warp(8.0, CG_FONT_INK_DARK),
+	      "the warp should stop strengthening below its floor");
+	check(cg_font_coverage_warp(12.0, CG_FONT_INK_DARK) > cg_font_coverage_warp(10.0, CG_FONT_INK_DARK)
+	      && cg_font_coverage_warp(10.0, CG_FONT_INK_DARK) > cg_font_coverage_warp(8.0, CG_FONT_INK_DARK),
+	      "the warp should strengthen as the size falls");
+	check(cg_font_coverage_warp(8.0, CG_FONT_INK_LIGHT) < cg_font_coverage_warp(8.0, CG_FONT_INK_DARK),
+	      "light ink on a dark ground should be warped harder than dark ink on a light one");
+	check(cg_font_coverage_warp(8.0, CG_FONT_INK_NONE) == 1.0,
+	      "an unstated polarity should not be warped at all");
+
+	/* 1b. AND THE OTHER SIZE POLICY: THE LCD FILTER IS THE THREE-TAP ONE BELOW FOURTEEN PIXELS AND THE FIVE-TAP
+	 * ONE ABOVE. The two values are FreeType's and the test does not restate which is which — what it asks is that
+	 * the SMALL answer and the LARGE answer differ, and that the switch is at the threshold and not somewhere else
+	 * that happens to be nearby. */
+	check(cg_font_lcd_filter_for(10.0) != cg_font_lcd_filter_for(26.0),
+	      "the LCD filter did not change between 10 px and 26 px, which is the size policy being inert");
+	check(cg_font_lcd_filter_for(14.0) == cg_font_lcd_filter_for(8.0)
+	      && cg_font_lcd_filter_for(14.0) != cg_font_lcd_filter_for(26.0),
+	      "the LCD filter's threshold is not at 14 px");
+	check(cg_font_lcd_filter_for(14.5) == cg_font_lcd_filter_for(26.0),
+	      "the LCD filter should be the five-tap one just above its threshold");
+
+	if (access(path, R_OK) != 0) {
+		printf("  (not run: %s is not on this machine)\n", path);
+		return g_fail - before;
+	}
+	provider = CGDataProviderCreateWithFilename(path);
+	font = (provider != NULL) ? CGFontCreateWithDataProvider(provider) : NULL;
+	check(font != NULL, "the face could not be opened");
+	if (font == NULL) {
+		return g_fail - before;
+	}
+	/* 2. THE WEIGHT, WHICH IS THE PROPERTY A PERSON SEES. The reference is the same word at 13 points on a
+	 * whole-pixel desktop — where a stem is a pixel and a bit and antialiasing is not thinning anything — and the
+	 * question is what that same DESIGN weighs at the 57.97-dpi session's scale. The measure is the mean coverage of
+	 * an inked pixel, not the total: the two renderings cover different AREAS (a 10.46-px em is smaller than a
+	 * 13-px one), and the weight of a stroke is what the darkness of its pixels says, not how many of them there
+	 * are. BOTH POLARITIES AND BOTH COVERAGES ARE ASKED, because the curve differs between them and a case that
+	 * asked only about black-on-white would leave the other three readings untested. */
+	for (g = 0; g < 4; g++) {
+		const int dark = (g % 2 == 0);
+		const int smoothing = (g / 2);
+		int ink_big = 0, ink_small = 0;
+		double big = fn_word_weight(font, word, 13.0, 1.0, smoothing, dark, &ink_big);
+		double small = fn_word_weight(font, word, 13.0, 0.8046875, smoothing, dark, &ink_small);
+		double ratio = big > 0.0 ? small / big : 0.0;
+
+		printf("  (%s %s: %d inked at %.1f, %d at %.1f — the 0.8046875 render weighs %.3f)\n",
+		       dark ? "dark on light" : "light on dark", smoothing ? "sub-pixel" : "grey     ", ink_big,
+		       big, ink_small, small, ratio);
+		check(ink_big > 300 && ink_small > 300, "%s %s: the word did not reach the surface (%d and %d inked)",
+		      dark ? "dark on light" : "light on dark", smoothing ? "sub-pixel" : "grey", ink_big, ink_small);
+		/* **THE BAND IS CALIBRATED, AND ITS ENDS ARE TWO MEASUREMENTS.** The low end is the one that has a
+		 * number behind it: MEASURED with the warp turned off, the 0.8046875 render weighs 0.954 of the
+		 * whole-pixel one in grey and 0.948 in colour — the thinning this exists to undo — so the floor is above
+		 * those and not merely above zero. The high end is the other mistake: a warp that overreaches draws the
+		 * word BOLD, which is worse than thin because it changes the design rather than its legibility. MEASURED
+		 * with the warp as it ships: 1.009 and 1.042 in grey, 0.994 and 1.022 in colour. */
+		check(ratio > 0.97 && ratio < 1.10,
+		      "%s %s: 13-point text at 0.8046875 weighs %.3f of the same text on a whole-pixel desktop, which "
+		      "is outside the band the warp is calibrated to", dark ? "dark on light" : "light on dark",
+		      smoothing ? "sub-pixel" : "grey", ratio);
+	}
+	CGFontRelease(font);
+	CGDataProviderRelease(provider);
+	CGColorSpaceRelease(rgb);
 	return g_fail - before;
 }
 
@@ -2566,6 +2930,8 @@ static const struct { const char *name; int (*fn)(void); } g_cases[] = {
 	  case_subpixel_positioning },
 	{ "Where the channels land, asked of all four destinations", case_destination_channel_order },
 	{ "Font smoothing: sub-pixel coverage, and the destination that decides it", case_font_smoothing },
+	{ "The size a glyph is rasterised at is a DEVICE size", case_text_device_ppem },
+	{ "Small text: the coverage warp's curve, and the weight it puts on the screen", case_text_low_dpi },
 };
 
 int main(void)

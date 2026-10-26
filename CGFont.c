@@ -24,9 +24,13 @@
  * answered 0, the probe asked why a layout engine had no cap height, and the fix measures the
  * `H` and `x` glyphs instead. A face with neither the field nor the glyph still answers 0.
  *
- * THREADING: THE LIBRARY HANDLE IS INITIALISED ONCE, LAZILY, and that is the whole of this file's
- * shared mutable state. Two threads creating the first font at the same time is a race this tree
- * does not have a primitive for yet; it is named here rather than hidden, and it is the only one.
+ * THREADING: THE LIBRARY HANDLE IS INITIALISED ONCE, LAZILY, and with it this file's other shared state — the LCD
+ * filter the rasteriser switches by size, the four coverage-warp tables beside it, and the glyph bitmap cache. Two
+ * threads creating the first font at the same time is a race this tree does not have a primitive for yet; it is named
+ * here rather than hidden, and it is the only one. The pieces the rasteriser adds do not widen it in any new
+ * direction: a wrong filter for one glyph, a table rebuilt underneath another and a cache entry evicted under a
+ * reader are the same class of race as the handle itself, and they are named where they are
+ * (`fn_lcd_filter_use`, `fn_warp_lut`, "THE GLYPH BITMAP CACHE") rather than left for a reader to find.
  */
 #include <CoreGraphics/CGFont.h>
 #include <CoreGraphics/CGFont_internal.h>
@@ -1188,17 +1192,163 @@ CGGlyph cg_font_glyph_for_code(CGFontRef font, unsigned code)
 /* ------------------------------------------------------------------------- */
 /* Rasterisation: the one door that asks the engine for pixels                */
 /* ------------------------------------------------------------------------- */
+/* THE ONE INCLUDE THIS SECTION NEEDS, and it rides with the code that needs it: the coverage warp is a power
+ * function of the size, and nothing above this line raises anything. */
+#include <math.h>
+
+/* ------------------------------------------------------------------------- */
+/* THE TWO CHOICES THAT ARE MADE FROM THE DEVICE SIZE, AND FROM NOTHING ELSE     */
+/* ------------------------------------------------------------------------- */
+
+/* **A GLYPH IS HINTED FOR THE GRID IT IS RASTERISED ON, AND A GLYPH THAT IS SMALL IS NOT MERELY A SMALL
+ * GLYPH.** Two engine settings change with the size, and both of them exist because a device pixel is a
+ * device pixel:
+ *
+ * 1. THE LCD FILTER. FreeType's five-tap FIR is the right convolution of a MONITOR, and it is what turns
+ *    three samples into something the eye reads as one pixel. At ten pixels an em, that same kernel takes a
+ *    third of the peak coverage off a stem: MEASURED (Inter 'l') the tallest sub-pixel sample at 10.46 px is
+ *    206 through the five-tap and 218 through the three-tap, and at 8 px it is 171 against 179 — and the
+ *    three-tap bitmap is three samples narrower, so the fringe eats less of the stem. Above the threshold the
+ *    five-tap is the better filter and stays: this is a SIZE policy, not a preference.
+ *
+ * 2. THE COVERAGE WARP. Read `cg_font_coverage_warp` for what it is for; what belongs here is that it is a
+ *    property of the SIZE and the POLARITY and is therefore applied to the mask in one place, before either
+ *    compositing path can disagree about it.
+ *
+ * Neither is a scaling decision: the size the caller passes is already a count of device pixels per em, so
+ * these only choose how a given grid is filled in. */
+
+/* THE SIZES, STATED ONCE. 16 px per em is where a stem is two pixels wide and antialiasing stops thinning an
+ * outline; 8 px per em is the smallest text a window in this tree sets. The filter's threshold sits between
+ * them because the measurement above is about stems, and a stem is what a filter eats. */
+#define FN_WARP_PPEM_TOP 16.0
+#define FN_WARP_PPEM_FLOOR 8.0
+#define FN_LCD_FILTER_LIGHT_PPEM 14.0
+
+/* THE TWO POLARITIES' STRENGTH AT FULL WARP, and the reason they differ is a fact about eyes rather than about
+ * fonts: dark ink on a light ground is read by what it COVERS, so a stem loses weight linearly with its
+ * coverage; light ink on a dark ground BLOOMS, so the same coverage reads thinner still, and the classic
+ * ClearType answer is a stronger curve for light-on-dark than for dark-on-light. These are CALIBRATED, not
+ * derived: they were set by measuring what makes 13-point text at the 57.97-dpi session's 0.8046875 scale weigh
+ * what the same text weighs on a whole-pixel desktop, and the test `text_low_dpi` holds them to a band. */
+#define FN_WARP_STRENGTH_DARK 0.30
+#define FN_WARP_STRENGTH_LIGHT 0.45
+
+double cg_font_coverage_warp(double ppem, int ink)
+{
+	double t;
+
+	if (ink != CG_FONT_INK_DARK && ink != CG_FONT_INK_LIGHT) {
+		return 1.0;
+	}
+	/* NOTHING BELOW IS A GUARD FOR A NEGATIVE SIZE: the rasteriser refuses those before it gets here, and a
+	 * warp of 1.0 is the honest answer for a size it cannot reason about. */
+	if (!(ppem < FN_WARP_PPEM_TOP)) {
+		return 1.0;
+	}
+	t = (FN_WARP_PPEM_TOP - ppem) / (FN_WARP_PPEM_TOP - FN_WARP_PPEM_FLOOR);
+	if (t > 1.0) {
+		t = 1.0;
+	}
+	/* **BOTH POLARITIES BOLDEN, WHICH IS THE PART WORTH STATING.** The exponent is applied to the COVERAGE —
+	 * the fraction of the pixel the ink occupies — so an exponent below one raises every partial pixel, and a
+	 * partial pixel is the whole of what a sub-pixel-wide stem is made of. That BOLDS dark ink (more pixels
+	 * closer to black) and it BOLDS light ink too (the same pixels closer to white), which is the same visual
+	 * direction for opposite colours and is why one curve serves both: coverage, not darkness, is what the
+	 * exponent moves. What differs is only how much each side needs. */
+	return 1.0 - (ink == CG_FONT_INK_DARK ? FN_WARP_STRENGTH_DARK : FN_WARP_STRENGTH_LIGHT) * t;
+}
+
+/* THE LOOKUP TABLE, BUILT ONCE PER (SIZE, POLARITY) AND KEPT, because a glyph is asked for once per frame per
+ * glyph and 256 `pow` calls per glyph is not a rounding error: MEASURED, the demo's 113 glyphs a frame would be
+ * 29,000 calls to save a handful of byte writes. FOUR SLOTS, keyed on the size in QUARTER-PIXELS and on the
+ * polarity — a key fine enough that a 10.46-px em reuses its table across a whole frame and coarse enough that a
+ * size crossing a quarter-pixel boundary is the only thing that rebuilds one. ZERO IS A FIXED POINT OF EVERY
+ * WARP, which is why a covered pixel stays uncovered and the ink's AREA is untouched by this: only the partial
+ * edge moves. */
+struct fn_warp_lut {
+	int ink;
+	int ppem_q;		/* the device size in quarter-pixels: the table's key */
+	unsigned char table[256];
+};
+
+static struct fn_warp_lut fn_warp_luts[4];
+static int fn_warp_next;
+
+/* THE LUT FOR THIS SIZE AND POLARITY, OR NULL FOR THE IDENTITY. A caller that gets NULL copies the engine's
+ * samples verbatim, which is every glyph at 16 px and up. */
+static const unsigned char *fn_warp_lut(double ppem, int ink)
+{
+	double gamma = cg_font_coverage_warp(ppem, ink);
+	int ppem_q;
+	int i;
+
+	if (gamma >= 1.0) {
+		return NULL;
+	}
+	ppem_q = (int)(ppem * 4.0 + 0.5);
+	for (i = 0; i < 4; i++) {
+		if (fn_warp_luts[i].ink == ink && fn_warp_luts[i].ppem_q == ppem_q) {
+			return fn_warp_luts[i].table;
+		}
+	}
+	{
+		struct fn_warp_lut *entry = &fn_warp_luts[fn_warp_next];
+
+		fn_warp_next = (fn_warp_next + 1) % 4;
+		entry->ink = ink;
+		entry->ppem_q = ppem_q;
+		for (i = 0; i < 256; i++) {
+			entry->table[i] = (unsigned char)(pow((double)i / 255.0, gamma) * 255.0 + 0.5);
+		}
+		return entry->table;
+	}
+}
+
+/* **THE ONE SENTENCE OF THIS POLICY, SPLIT OUT SO IT CAN BE ASKED RATHER THAN ONLY OBEYED**: FreeType's
+ * `FT_LcdFilter` value for a device size. Below the threshold the three-tap, above it the five-tap, and the
+ * measurement behind that is in the table at the top of this section. */
+int cg_font_lcd_filter_for(double ppem)
+{
+	return (ppem <= FN_LCD_FILTER_LIGHT_PPEM) ? FT_LCD_FILTER_LIGHT : FT_LCD_FILTER_DEFAULT;
+}
+
+/* AND THE SWITCH ITSELF, MADE ONLY WHEN THE SIZE CROSSES THE THRESHOLD. It is LIBRARY state rather than face
+ * state (FreeType has no per-face spelling of it), so switching it per glyph would be a property write per
+ * glyph; remembering which one is set makes it a property write per SIZE CHANGE. The remembered value starts as
+ * whatever `fn_library` set, which is the five-tap the whole library used before this mattered. */
+static int fn_lcd_filter_now = FT_LCD_FILTER_DEFAULT;
+
+static void fn_lcd_filter_use(double ppem)
+{
+	int want = cg_font_lcd_filter_for(ppem);
+
+	if (want == fn_lcd_filter_now || fn_library_handle == NULL) {
+		return;
+	}
+	fn_lcd_filter_now = want;
+	(void)FT_Library_SetLcdFilter(fn_library_handle, (FT_LcdFilter)want);
+}
 
 int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size, CGAffineTransform matrix,
-			 CGPoint delta, int smoothing, unsigned char **coverage, int *width, int *height,
+			 CGPoint delta, int smoothing, int ink, unsigned char **coverage, int *width, int *height,
 			 int *left, int *top, double *advance, int *samples)
 {
 	FT_Matrix m;
 	FT_Vector d;
 	FT_GlyphSlot slot;
+	FT_Int32 flags = FT_LOAD_DEFAULT;
+	const unsigned char *warp;
 	unsigned char *buf;
 	int w, h, row, mirror = 0;
 	int per_pixel = 1;
+	/* WHETHER THE TRANSFORM IS THE IDENTITY, which is the question a bitmap strike's absence depends on: an
+	 * embedded bitmap is a picture at one size and ignores `FT_Set_Transform` entirely, so a turned or sheared
+	 * glyph must not be allowed to come back as one. The test is on the MAGNITUDE because a window's context is
+	 * flipped (d = -1) at 1:1 and that flip is taken out of the matrix below. */
+	int plain = (matrix.b == 0.0 && matrix.c == 0.0
+		     && (matrix.a == 1.0 || matrix.a == -1.0)
+		     && (matrix.d == 1.0 || matrix.d == -1.0));
 
 	if (font == NULL || font->face == NULL || coverage == NULL || width == NULL || height == NULL) {
 		return 0;
@@ -1251,9 +1401,28 @@ int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size, CGAf
 	/* **THE TARGET IS THE RENDERER'S HALF OF SMOOTHING, AND IT IS NOT ONLY A RENDER MODE.** `FT_LOAD_TARGET_LCD`
 	 * is what tells a font's own hinter that the grid it is fitting to is a THIRD of a pixel wide — asking for
 	 * `FT_RENDER_MODE_LCD` alone gets the colour bitmap drawn from outlines that were grid-fitted for a whole-pixel
-	 * grid, which is blurrier than the grey version it is supposed to improve on. */
-	if (FT_Load_Glyph(font->face, (FT_UInt)glyph, smoothing ? (FT_LOAD_DEFAULT | FT_LOAD_TARGET_LCD)
-							       : FT_LOAD_DEFAULT) != 0) {
+	 * grid, which is blurrier than the grey version it is supposed to improve on.
+	 *
+	 * **AND A SMALL GREY GLYPH IS LOADED WITH LIGHT HINTING, WHICH IS THE OTHER HALF OF THE SAME IDEA.** Full
+	 * hinting grid-fits a stem's HORIZONTAL edges as well as its vertical ones, and in this tree the advances are
+	 * NOT hinted — layout comes from Core Text's own font metrics, which are a linear function of the size (see
+	 * CGContext.h on why a hinted metric would put a scale into the layout). A hinted outline on an unhinted
+	 * advance is a glyph that has been moved inside its own advance: at 26 px that is invisible, and at 10 px it is
+	 * the uneven rhythm low-DPI text is criticised for. Light hinting fits vertically (where a stem needs it) and
+	 * leaves x alone (where the advance already decided), and it is what macOS itself does. ABOVE THE THRESHOLD
+	 * FULL HINTING IS THE BETTER ANSWER and is what this library has always done. */
+	if (smoothing) {
+		flags |= FT_LOAD_TARGET_LCD;
+	} else if (pixel_size < FN_WARP_PPEM_TOP) {
+		flags |= FT_LOAD_TARGET_LIGHT;
+	}
+	if (!plain) {
+		flags |= FT_LOAD_NO_BITMAP;
+	}
+	if (smoothing) {
+		fn_lcd_filter_use((double)pixel_size);
+	}
+	if (FT_Load_Glyph(font->face, (FT_UInt)glyph, flags) != 0) {
 		fprintf(stderr, "CG-REFUSE: the engine would not load glyph %u\n", (unsigned)glyph);
 		return 0;
 	}
@@ -1283,11 +1452,27 @@ int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size, CGAf
 	 * (y down) — reversing them beat the glyph twice and every letter came out vertically mirrored.
 	 * The probe's `L` check passed on that upside-down picture, because a mirrored `L` still has its
 	 * STEM crossing the baseline, which is all that check measured; it now compares two bands. */
+	/* **AND THE COVERAGE IS WARPED WHILE IT IS COPIED, WHICH IS THE ONE PASS OVER IT THAT ALREADY EXISTS.**
+	 * See `cg_font_coverage_warp` for what the curve is for; what is here is that the table is looked up once per
+	 * glyph rather than once per sample, and that a 16-px-and-up glyph gets NULL and takes the plain copy. The
+	 * warp is applied to the SAMPLES, so a smoothed glyph's three sub-pixel columns each get the same curve —
+	 * which is the same thing every renderer that does this does, because the three samples of a pixel are three
+	 * coverages and coverage is what the curve is a function of. */
+	warp = fn_warp_lut((double)pixel_size, ink);
 	for (row = 0; row < h; row++) {
-		memcpy(buf + (size_t)row * (size_t)w,
-		       slot->bitmap.buffer + (size_t)row * (size_t)(slot->bitmap.pitch < 0
-								    ? -slot->bitmap.pitch : slot->bitmap.pitch),
-		       (size_t)w);
+		const unsigned char *src = slot->bitmap.buffer + (size_t)row * (size_t)(slot->bitmap.pitch < 0
+										      ? -slot->bitmap.pitch
+										      : slot->bitmap.pitch);
+		unsigned char *dst = buf + (size_t)row * (size_t)w;
+		int col;
+
+		if (warp == NULL) {
+			memcpy(dst, src, (size_t)w);
+			continue;
+		}
+		for (col = 0; col < w; col++) {
+			dst[col] = warp[src[col]];
+		}
 	}
 	*coverage = buf;
 	/* **`*width` IS A COUNT OF SAMPLES AND NOT OF PIXELS**, and `*samples` says how many of them make a pixel.
@@ -1311,6 +1496,438 @@ int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size, CGAf
 	}
 	(void)mirror;
 	return 1;
+}
+
+/* ============================================================================================
+ * THE GLYPH BITMAP CACHE
+ *
+ * **A GLYPH AT A SIZE IS THE SAME PICTURE EVERY TIME IT IS ASKED FOR, AND ASKING IS NOT CHEAP.**
+ * `cg_font_render_glyph` above sets the face's size, loads the outline, runs FreeType's rasteriser and
+ * then walks every coverage sample through the warp table — per glyph. A page of text re-asks for the
+ * same few dozen pictures over and over, and a terminal re-asks for the same ninety-five cells sixty
+ * times a second; the second and every later ask can only answer what the first one answered. This is
+ * where that answer is kept.
+ *
+ * **THE KEY IS EXACTLY THE ENGINE'S INPUT, WHICH IS THE ONLY WAY THE CACHE CANNOT BE WRONG.** The
+ * rendering depends on the face, the glyph, the device size (which is what `FT_Set_Char_Size` is given,
+ * not the point size it came from), the transform (`FT_Set_Transform`'s four 16.16 factors), the subpixel
+ * delta (two 26.6 offsets), whether coverage was smoothed, and which way the warp curves it. Every one
+ * of those is in the key in the ENGINE'S OWN PRECISION — the 26.6 size and delta and the 16.16 matrix —
+ * so two calls that hash equal are two calls the engine would have given the same bytes. Everything else
+ * `cg_font_render_glyph` reads (`mirror`, `plain`, the LCD filter, whether the warp applies at all) is a
+ * FUNCTION of those, which is why a flag is not a key: keying a derived value beside its inputs is how a
+ * cache grows two entries for one picture.
+ *
+ * **THE FONT IS RETAINED BY THE ENTRY, WHICH IS THE IDENTITY HALF OF THE SAME RULE.** The struct
+ * `CGFont` is a malloc'd block, so a face released and another created can occupy the same address, and a
+ * pointer-keyed cache would then answer the new face's glyph with the old face's picture. Holding a
+ * reference makes the pointer unique for as long as the entry lives. The cost is named rather than
+ * hidden: a font whose last caller lets go stays alive until its entries are evicted, which is bounded by
+ * the budget below and is the price of a key that cannot alias.
+ *
+ * **THE BUDGET IS BYTES AND BY COUNT, AND THE VICTIM IS THE LEAST RECENTLY USED.** A terminal's working
+ * set is a few hundred entries of a few hundred bytes, so the default 4 MiB is about twenty such sets and
+ * a proportional page is far less; the 4096-entry ceiling is what keeps a cache of space glyphs (which
+ * are one byte each) from spending the budget's whole allowance on structs. Eviction scans for the oldest
+ * stamp rather than keeping a list in order — the scan happens only when the budget is already full, and
+ * an LRU list that must be spliced on every hit is a second place for an off-by-one to live.
+ *
+ * **THE DOOR RETURNS A BORROWED POINTER AND SAYS SO.** The bytes belong to the cache and are valid until
+ * the next call into it; a glyph larger than the whole budget is served from a one-slot holder that the
+ * next call drops, so the borrow contract holds even for a picture that would not fit. This is the one
+ * place a caller has to read a comment rather than a return value, and `CGFont_internal.h` says it at the
+ * declaration as well.
+ *
+ * **THREADING: THE CACHE IS UNSYNCHRONISED, FOR THE REASON THE HEADER GIVES FOR THE REST OF THIS FILE.**
+ * `FT_Set_Char_Size` and `FT_Set_Transform` are already face-wide state written per glyph, so two threads
+ * drawing at once was a race before this cache existed and is not a new one now. It is named here because
+ * a cache is the sort of thing a reader assumes is guarded.
+ * ========================================================================================== */
+
+#define FN_GLYPH_BUCKETS		512u
+#define FN_GLYPH_DEFAULT_BYTES		(4u * 1024u * 1024u)
+#define FN_GLYPH_DEFAULT_ENTRIES	4096u
+
+struct fn_glyph_entry {
+	struct fn_glyph_entry *next;	/* the bucket chain */
+	unsigned bucket;		/* where it is chained, so removal does not re-hash */
+	CGFontRef font;			/* RETAINED: the key's identity, see the block above */
+	unsigned glyph;
+	FT_F26Dot6 ppem;		/* the device size FT_Set_Char_Size is given */
+	FT_Fixed mxx, mxy, myx, myy;	/* the transform FT_Set_Transform is given */
+	FT_Pos dx, dy;			/* the subpixel delta, in 26.6 pixels */
+	int smoothing;
+	int ink;
+	int width, height;		/* SAMPLES wide, as the renderer reports */
+	int left, top;
+	int samples;			/* 1 grey, 3 sub-pixel */
+	double advance;
+	unsigned long last_used;	/* the LRU stamp */
+	unsigned char *coverage;	/* OWNED, `width * height` bytes */
+	size_t bytes;			/* what this entry costs the budget */
+};
+
+static struct fn_glyph_entry *fn_glyph_buckets[FN_GLYPH_BUCKETS];
+/* **THE ONE-SLOT HOLDER FOR A PICTURE THE CACHE WILL NOT KEEP**: a rendering bigger than the budget, or any
+ * rendering at all when the budget is zero. Dropping the previous one on the next call is what makes the
+ * borrowed pointer's lifetime a promise instead of a hope. */
+static struct fn_glyph_entry *fn_glyph_transient;
+static size_t fn_glyph_bytes;
+static unsigned fn_glyph_count;
+static unsigned long fn_glyph_clock;
+static size_t fn_glyph_budget;
+static unsigned fn_glyph_max_entries;
+static int fn_glyph_ready;
+/* THE COUNTERS, CUMULATIVE AND FOR THE PROBE. A cache that is correct but never hit is a slower path for
+ * nothing, which is why hits and misses are answered rather than inferred from a clock. */
+static unsigned long fn_glyph_hits;
+static unsigned long fn_glyph_misses;
+static unsigned long fn_glyph_evictions;
+
+/* THE BUDGET IS READ ONCE, FROM THE ENVIRONMENT, ON FIRST USE — the same shape `fn_name_cache_note_env` uses
+ * for the registry, and with the same silence: a value that is not a byte count leaves the default in place and
+ * says so rather than turning caching off behind a typo. */
+static void fn_glyph_cache_ready(void)
+{
+	const char *env;
+
+	if (fn_glyph_ready) {
+		return;
+	}
+	fn_glyph_ready = 1;
+	fn_glyph_budget = FN_GLYPH_DEFAULT_BYTES;
+	fn_glyph_max_entries = FN_GLYPH_DEFAULT_ENTRIES;
+	env = getenv("CG_GLYPH_CACHE_BYTES");
+	if (env != NULL && *env != '\0') {
+		char *end = NULL;
+		unsigned long long want = strtoull(env, &end, 10);
+
+		if (end != env && *end == '\0') {
+			fn_glyph_budget = (size_t)want;
+		}
+		else {
+			fprintf(stderr, "CG-NOTE: CG_GLYPH_CACHE_BYTES=\"%s\" is not a byte count; "
+				"the %u-byte default is in force\n", env, (unsigned)FN_GLYPH_DEFAULT_BYTES);
+		}
+	}
+}
+
+static void fn_glyph_free(struct fn_glyph_entry *entry)
+{
+	CGFontRelease(entry->font);
+	free(entry->coverage);
+	free(entry);
+}
+
+static void fn_glyph_remove(struct fn_glyph_entry *entry)
+{
+	struct fn_glyph_entry **slot = &fn_glyph_buckets[entry->bucket];
+
+	while (*slot != NULL) {
+		if (*slot == entry) {
+			*slot = entry->next;
+			break;
+		}
+		slot = &(*slot)->next;
+	}
+	fn_glyph_bytes -= entry->bytes;
+	fn_glyph_count--;
+	fn_glyph_free(entry);
+}
+
+/* THE LEAST RECENTLY USED ENTRY, FOUND BY SCAN. Zero only when the cache is empty, which is the case the
+ * caller's loop has to stop on rather than loop on. */
+static void fn_glyph_evict_one(void)
+{
+	unsigned long oldest = 0;
+	struct fn_glyph_entry *victim = NULL;
+	unsigned b;
+
+	for (b = 0; b < FN_GLYPH_BUCKETS; b++) {
+		struct fn_glyph_entry *e;
+
+		for (e = fn_glyph_buckets[b]; e != NULL; e = e->next) {
+			if (victim == NULL || e->last_used < oldest) {
+				victim = e;
+				oldest = e->last_used;
+			}
+		}
+	}
+	if (victim != NULL) {
+		fn_glyph_evictions++;
+		fn_glyph_remove(victim);
+	}
+}
+
+static unsigned fn_glyph_mix(unsigned h, unsigned v)
+{
+	h ^= v + 0x9e3779b9u + (h << 6) + (h >> 2);
+	h *= 2654435761u;
+	return h;
+}
+
+struct fn_glyph_key {
+	CGFontRef font;
+	unsigned glyph;
+	FT_F26Dot6 ppem;
+	FT_Fixed mxx, mxy, myx, myy;
+	FT_Pos dx, dy;
+	int smoothing;
+	int ink;
+};
+
+static unsigned fn_glyph_hash(const struct fn_glyph_key *k)
+{
+	unsigned h = 2166136261u;
+
+	h = fn_glyph_mix(h, (unsigned)(uintptr_t)k->font);
+	h = fn_glyph_mix(h, (unsigned)k->glyph);
+	h = fn_glyph_mix(h, (unsigned)k->ppem);
+	h = fn_glyph_mix(h, (unsigned)k->mxx);
+	h = fn_glyph_mix(h, (unsigned)k->mxy);
+	h = fn_glyph_mix(h, (unsigned)k->myx);
+	h = fn_glyph_mix(h, (unsigned)k->myy);
+	h = fn_glyph_mix(h, (unsigned)k->dx);
+	h = fn_glyph_mix(h, (unsigned)k->dy);
+	h = fn_glyph_mix(h, (unsigned)(k->smoothing != 0));
+	h = fn_glyph_mix(h, (unsigned)k->ink);
+	return h & (FN_GLYPH_BUCKETS - 1);
+}
+
+static int fn_glyph_matches(const struct fn_glyph_entry *e, const struct fn_glyph_key *k)
+{
+	return e->font == k->font && e->glyph == k->glyph && e->ppem == k->ppem
+	       && e->mxx == k->mxx && e->mxy == k->mxy && e->myx == k->myx && e->myy == k->myy
+	       && e->dx == k->dx && e->dy == k->dy
+	       && e->smoothing == (k->smoothing != 0) && e->ink == k->ink;
+}
+
+/* WHAT HAPPENS TO A NEWLY RENDERED PICTURE: kept, or held in the single slot. The budget and the count ceiling
+ * are both enforced here, so there is one place where "does this fit" is decided. */
+static void fn_glyph_admit(struct fn_glyph_entry *entry, unsigned bucket)
+{
+	if (fn_glyph_budget == 0 || entry->bytes > fn_glyph_budget) {
+		if (fn_glyph_transient != NULL) {
+			fn_glyph_free(fn_glyph_transient);
+		}
+		fn_glyph_transient = entry;
+		return;
+	}
+	entry->bucket = bucket;
+	while ((fn_glyph_bytes + entry->bytes > fn_glyph_budget)
+	       || (fn_glyph_count + 1u > fn_glyph_max_entries)) {
+		if (fn_glyph_transient != NULL) {
+			/* THE SLOT GOES FIRST: it is a picture nobody kept, and spending the cache's own entries on it
+			 * while a real one waits is the wrong order. */
+			fn_glyph_free(fn_glyph_transient);
+			fn_glyph_transient = NULL;
+			continue;
+		}
+		if (fn_glyph_bytes == 0) {
+			break;	/* nothing left to evict: a count ceiling below one entry cannot be honoured */
+		}
+		fn_glyph_evict_one();
+	}
+	entry->last_used = ++fn_glyph_clock;
+	entry->next = fn_glyph_buckets[bucket];
+	fn_glyph_buckets[bucket] = entry;
+	fn_glyph_count++;
+	fn_glyph_bytes += entry->bytes;
+}
+
+int cg_font_render_glyph_cached(CGFontRef font, CGGlyph glyph, CGFloat pixel_size,
+				CGAffineTransform matrix, CGPoint delta, int smoothing, int ink,
+				const unsigned char **coverage, int *width, int *height,
+				int *left, int *top, double *advance, int *samples)
+{
+	struct fn_glyph_key key;
+	struct fn_glyph_entry *entry;
+	unsigned bucket;
+	unsigned char *fresh = NULL;
+	int w = 0, h = 0, l = 0, t = 0, s = 1;
+	double adv = 0.0;
+
+	if (font == NULL || coverage == NULL) {
+		return 0;
+	}
+	fn_glyph_cache_ready();
+
+	/* THE KEY IS BUILT WITH THE SAME ARITHMETIC THE RENDERER USES, not with a tidier one. `FT_Set_Char_Size`
+	 * is given `(FT_F26Dot6)(pixel_size * 64.0 + 0.5)` and `FT_Set_Transform` is given the four truncated 16.16
+	 * factors, so those exact values are what two calls have to agree on — a key built from the doubles would
+	 * hit for two sizes the engine rounds the same way and miss for two it does not, which is the wrong half of
+	 * both answers. */
+	key.font = font;
+	key.glyph = (unsigned)glyph;
+	key.ppem = (FT_F26Dot6)(pixel_size * 64.0 + 0.5);
+	key.mxx = (FT_Fixed)(matrix.a * 65536.0);
+	key.mxy = (FT_Fixed)(matrix.b * 65536.0);
+	key.myx = (FT_Fixed)(matrix.c * 65536.0);
+	key.myy = (FT_Fixed)(matrix.d * 65536.0);
+	key.dx = (FT_Pos)(delta.x * 64.0);
+	key.dy = (FT_Pos)(delta.y * 64.0);
+	key.smoothing = (smoothing != 0);
+	key.ink = ink;
+
+	bucket = fn_glyph_hash(&key);
+	for (entry = fn_glyph_buckets[bucket]; entry != NULL; entry = entry->next) {
+		if (fn_glyph_matches(entry, &key)) {
+			entry->last_used = ++fn_glyph_clock;
+			fn_glyph_hits++;
+			if (width != NULL) {
+				*width = entry->width;
+			}
+			if (height != NULL) {
+				*height = entry->height;
+			}
+			if (left != NULL) {
+				*left = entry->left;
+			}
+			if (top != NULL) {
+				*top = entry->top;
+			}
+			if (samples != NULL) {
+				*samples = entry->samples;
+			}
+			if (advance != NULL) {
+				*advance = entry->advance;
+			}
+			*coverage = entry->coverage;
+			return 1;
+		}
+	}
+	fn_glyph_misses++;
+
+	/* **A REFUSAL IS NOT CACHED.** The renderer answers zero for a face that would not load or rasterise a
+	 * glyph, and it says why on stderr when it does; repeating the work costs nothing in the case that is already
+	 * the rare one, and suppressing the diagnostic would hide a broken face behind a hit count. */
+	if (!cg_font_render_glyph(font, glyph, pixel_size, matrix, delta, smoothing, ink,
+				  &fresh, &w, &h, &l, &t, &adv, &s)) {
+		free(fresh);
+		return 0;
+	}
+
+	entry = (struct fn_glyph_entry *)calloc(1, sizeof(*entry));
+	if (entry == NULL) {
+		/* THE CALLER STILL GETS ITS PICTURE, WITHOUT THE CACHE'S PROMISE OR ITS BOOKKEEPING: the renderer's
+		 * buffer goes into the transient slot so the borrow contract holds even when the struct could not be
+		 * allocated. */
+		if (width != NULL) {
+			*width = w;
+		}
+		if (height != NULL) {
+			*height = h;
+		}
+		if (left != NULL) {
+			*left = l;
+		}
+		if (top != NULL) {
+			*top = t;
+		}
+		if (samples != NULL) {
+			*samples = s;
+		}
+		if (advance != NULL) {
+			*advance = adv;
+		}
+		*coverage = fresh;
+		return 1;
+	}
+	entry->font = CGFontRetain(font);
+	entry->glyph = (unsigned)glyph;
+	entry->ppem = key.ppem;
+	entry->mxx = key.mxx;
+	entry->mxy = key.mxy;
+	entry->myx = key.myx;
+	entry->myy = key.myy;
+	entry->dx = key.dx;
+	entry->dy = key.dy;
+	entry->smoothing = key.smoothing;
+	entry->ink = ink;
+	entry->width = w;
+	entry->height = h;
+	entry->left = l;
+	entry->top = t;
+	entry->samples = s;
+	entry->advance = adv;
+	entry->coverage = fresh;
+	entry->bytes = sizeof(*entry) + (size_t)((w > 0 && h > 0) ? w * h : 1);
+
+	fn_glyph_admit(entry, bucket);
+
+	if (width != NULL) {
+		*width = entry->width;
+	}
+	if (height != NULL) {
+		*height = entry->height;
+	}
+	if (left != NULL) {
+		*left = entry->left;
+	}
+	if (top != NULL) {
+		*top = entry->top;
+	}
+	if (samples != NULL) {
+		*samples = entry->samples;
+	}
+	if (advance != NULL) {
+		*advance = entry->advance;
+	}
+	*coverage = entry->coverage;
+	return 1;
+}
+
+/* **EMPTYING ALSO ZEROES THE COUNTERS**, because the two things a probe does to this cache are "forget what you
+ * know" and "how hard did you work", and a flush that left the old hits behind would make the second question
+ * unanswerable after the first. */
+void cg_font_glyph_cache_flush(void)
+{
+	unsigned b;
+
+	for (b = 0; b < FN_GLYPH_BUCKETS; b++) {
+		struct fn_glyph_entry *entry = fn_glyph_buckets[b];
+
+		fn_glyph_buckets[b] = NULL;
+		while (entry != NULL) {
+			struct fn_glyph_entry *next = entry->next;
+
+			fn_glyph_free(entry);
+			entry = next;
+		}
+	}
+	if (fn_glyph_transient != NULL) {
+		fn_glyph_free(fn_glyph_transient);
+		fn_glyph_transient = NULL;
+	}
+	fn_glyph_bytes = 0;
+	fn_glyph_count = 0;
+	fn_glyph_hits = 0;
+	fn_glyph_misses = 0;
+	fn_glyph_evictions = 0;
+}
+
+void cg_font_glyph_cache_set_budget(size_t bytes)
+{
+	fn_glyph_cache_ready();
+	if (bytes == fn_glyph_budget) {
+		return;
+	}
+	cg_font_glyph_cache_flush();
+	fn_glyph_budget = bytes;
+}
+
+void cg_font_glyph_cache_stats(CGGlyphCacheStats *stats)
+{
+	if (stats == NULL) {
+		return;
+	}
+	fn_glyph_cache_ready();
+	stats->hits = fn_glyph_hits;
+	stats->misses = fn_glyph_misses;
+	stats->evictions = fn_glyph_evictions;
+	stats->entries = fn_glyph_count;
+	stats->bytes = fn_glyph_bytes;
+	stats->budget = fn_glyph_budget;
 }
 
 /* ------------------------------------------------------------------------- */

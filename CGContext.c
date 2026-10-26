@@ -112,6 +112,10 @@ typedef struct cg_state {
 	/* THE GRAPHICS-STATE HALF OF THE SUBPIXEL PAIR. See the context's `allows_` flag above for why
 	 * this one is here and that one is not. */
 	int should_subpixel_position_fonts;
+	/* AND THE QUANTISATION PAIR, which is the same asymmetry again: `allows` is the context's and `should` is the
+	 * state's. Kept apart from the positioning pair rather than folded into it, because they answer different
+	 * questions — "is the fraction honoured" and "is it snapped" — and a caller can want either one alone. */
+	int should_subpixel_quantize_fonts;
 	/* AND THE SAME ASYMMETRY FOR SMOOTHING: its `Allows` is the context's and its `Should` is the state's. */
 	int should_smooth_fonts;
 	/* THE SHADOW, WHICH IS A GRAPHICS-STATE PARAMETER — so Save/Restore carry it for free, the struct
@@ -209,6 +213,7 @@ struct CGContext {
 	 * their `Should` twins ARE in the state below. THAT ASYMMETRY IS THE INTERFACE, and the probe
 	 * checks it by saving, turning the state flag off, drawing, and restoring. */
 	int allows_subpixel_positioning;
+	int allows_subpixel_quantization;
 	/* AND SMOOTHING'S HALF OF THE SAME PAIR — sub-pixel ANTIALIASING, three samples to the pixel, which is a
 	 * different rendering path from sub-pixel POSITIONING and governed by its own two flags. */
 	int allows_font_smoothing;
@@ -414,6 +419,10 @@ static void cg_state_init_full(cg_state *st, int width, int height)
 	st->text_mode = kCGTextFill;
 	st->text_encoding = kCGEncodingFontSpecific;
 	st->should_subpixel_position_fonts = 1;
+	/* **AND QUANTISATION IS ON IN THE GRAPHICS STATE TOO, WHICH IS APPLE'S DEFAULT AND THE REASON ITS HEADER CAN
+	 * SAY A CONTEXT QUANTIZES SUBPIXEL POSITIONS AT ALL.** A caller that wants the exact fraction closes the two
+	 * doors and gets `cg_subpixel_quantum` answering 1.0. */
+	st->should_subpixel_quantize_fonts = 1;
 	st->pattern_phase = CGSizeMake(0.0, 0.0);
 }
 
@@ -561,6 +570,9 @@ CGContextRef CGBitmapContextCreateWithData(void *data, size_t width, size_t heig
 	 * its comment adds ("fonts will be antialiased when drawn"). Written out rather than
 	 * abbreviated, because each term is a door somebody can close. */
 	c->allows_subpixel_positioning = 1;
+	/* AND SO IS QUANTISATION, ITS OWN PAIR OF DOORS — see `cg_subpixel_quantum` for the two quanta and
+	 * `cg_state_init_full` for why the graphics-state half defaults on. */
+	c->allows_subpixel_quantization = 1;
 	/* **AND SMOOTHING IS ALLOWED BY DEFAULT, WHICH IS WHAT MAKES THE DESKTOP'S TEXT LOOK LIKE THE MAC'S.** This
 	 * tier's AppKit never calls these doors, so a default of "off" would mean a renderer that can and never
 	 * does; the destination has the last word in `cg_font_smoothing` below, where a context with an alpha
@@ -783,8 +795,10 @@ CGContextRef cg_context_create_pdf(struct cg_pdf_writer *writer)
 	c->path = CGPathCreateMutable();
 	c->allows_antialiasing = 1;
 	c->allows_subpixel_positioning = 1;
+	c->allows_subpixel_quantization = 1;
 	c->allows_font_smoothing = 1;
 	c->state.should_subpixel_position_fonts = 1;
+	c->state.should_subpixel_quantize_fonts = 1;
 	c->state.should_smooth_fonts = 1;
 	c->owns_data = 1;
 	c->data = calloc(1, 4);
@@ -5306,21 +5320,26 @@ void CGContextSetShouldSmoothFonts(CGContextRef c, bool should)
 	}
 }
 
+/* **QUANTISATION IS IMPLEMENTED NOW, AND THE REASON IT USED TO BE REFUSED IS STILL A GOOD ONE — IT IS SIMPLY
+ * ANSWERED RATHER THAN DECLINED.** The 10.6 header says a context "quantizes subpixel positions" and never says
+ * to what, so the first version of this file refused the door by name instead of inventing a quantum. What the
+ * refusal cost was the thing quantisation exists for: a cacheable mask, and a stem that stays where it was. The
+ * quantum is stated where it is chosen (`cg_subpixel_quantum`) and it is THE THIRD FOR SUB-PIXEL COVERAGE AND
+ * THE QUARTER FOR GREY — a third because three samples to the pixel is what the coverage has, a quarter because
+ * grey coverage has no sub-columns and a quarter is the finest step that still repeats. Those are the numbers
+ * the field converged on, which is the best available reading of a header that does not say. */
 void CGContextSetAllowsFontSubpixelQuantization(CGContextRef c, bool allows)
 {
-	(void)c;
-	(void)allows;
-	fprintf(stderr, "CG-REFUSE: subpixel quantisation is not implemented: the 10.6 header says a "
-			"context quantizes subpixel positions and never says to what, so this library either "
-			"honours the fraction or rounds the pen\n");
+	if (c != NULL) {
+		c->allows_subpixel_quantization = allows ? 1 : 0;
+	}
 }
 
 void CGContextSetShouldSubpixelQuantizeFonts(CGContextRef c, bool should)
 {
-	(void)c;
-	(void)should;
-	fprintf(stderr, "CG-REFUSE: subpixel quantisation (the state's half) is refused for the reason "
-			"above\n");
+	if (c != NULL) {
+		c->state.should_subpixel_quantize_fonts = should ? 1 : 0;
+	}
 }
 
 void CGContextSelectFont(CGContextRef c, const char *name, CGFloat size, CGTextEncoding textEncoding)
@@ -5414,6 +5433,34 @@ static int cg_subpixel_positioning(CGContextRef c)
 	       && c->allows_antialiasing && c->state.antialias;
 }
 
+/* THE PEN SNAPPED TO THAT QUANTUM, rounded the way `cg_glyph_pen` rounds (half away from zero) so that a negative
+ * pen is never pulled toward the origin more than a positive one is pushed away from it. */
+static double cg_glyph_quantised(double v, double q)
+{
+	return q > 1.0 ? (double)cg_glyph_pen(v * q) / q : v;
+}
+
+/* **THE COVERAGE WARP'S POLARITY, WHICH IS A QUESTION ABOUT THE INK AND NOT ABOUT THE CONTEXT'S FORMAT.** The
+ * warp is calibrated against a light ground and dark ink — the ordinary window — so a fill that is darker than
+ * middle grey asks for the dark-ink curve and a lighter one for the light-ink curve. THE GROUND IS NOT KNOWN HERE
+ * and cannot be: a context is one buffer and what is under the glyph is a colour some earlier call put there. So
+ * the assumption is stated instead of hidden, and the honest default for this tree is the one its chrome uses —
+ * dark text on light surfaces.
+ *
+ * A TRANSLUCENT FILL ASKS FOR NO WARP AT ALL. The curve's calibration is a coverage against a background, and a
+ * `CGContextSetAlpha` below one divides that coverage by an alpha the mask never sees; warping first would bolden
+ * a faded label, which is a different thing from a small one. */
+static int cg_text_ink(CGContextRef c)
+{
+	double luma;
+
+	if (c->state.rgba[3] * c->state.alpha < 1.0 - 1e-6) {
+		return CG_FONT_INK_NONE;
+	}
+	luma = 0.2126 * c->state.rgba[0] + 0.7152 * c->state.rgba[1] + 0.0722 * c->state.rgba[2];
+	return luma < 0.5 ? CG_FONT_INK_DARK : CG_FONT_INK_LIGHT;
+}
+
 /* **WHETHER A GLYPH IS RASTERISED IN COLOUR: SUB-PIXEL COVERAGE, THREE SAMPLES TO THE PIXEL.** Four terms, and
  * the fourth is the one that makes it correct rather than merely switched on — THE DESTINATION MUST HAVE NO ALPHA
  * CHANNEL. A pixel's three samples attenuate its three channels INDEPENDENTLY and there is only ONE alpha to
@@ -5434,6 +5481,26 @@ static int cg_font_smoothing(CGContextRef c)
 	}
 	return (alpha == kCGImageAlphaNone || alpha == kCGImageAlphaNoneSkipFirst
 		|| alpha == kCGImageAlphaNoneSkipLast) ? 1 : 0;
+}
+
+/* **THE PEN'S QUANTUM, WHICH IS WHAT MAKES A SUBPIXEL POSITION CACHEABLE — AND WHAT KEEPS A STEM IN ONE PLACE.**
+ * An unquantised pen puts every glyph at a different fraction, so no two masks are alike and every one of them is
+ * a fresh trip through the hinter; more to the point for a reader, the SAME glyph at two nearly equal fractions
+ * gets two nearly equal hinting decisions, and the difference between them is the shimmer of prose while it
+ * scrolls. Quantising the fraction to a third of a pixel for sub-pixel coverage follows from what the coverage
+ * IS — three samples to the pixel, so a third is a sub-column and a fraction between two of them has nowhere to
+ * land — and to a quarter for grey coverage, where there are no sub-columns and a quarter is the finest step that
+ * still repeats. Both numbers are the ones the field converged on (a third for LCD, a quarter for greyscale), and
+ * they are the reason Apple's own header can say a context "quantizes subpixel positions" without a number.
+ *
+ * THE ANSWER IS 1.0 FOR "DO NOT QUANTISE", so the caller needs no second question: either gate being off is the
+ * unquantised path, which is exactly what this library did before it had the two doors. */
+static double cg_subpixel_quantum(CGContextRef c)
+{
+	if (!c->allows_subpixel_quantization || !c->state.should_subpixel_quantize_fonts) {
+		return 1.0;
+	}
+	return cg_font_smoothing(c) ? 3.0 : 4.0;
 }
 
 /* **A SMOOTHED GLYPH, COMPOSITED BY HAND BECAUSE PIXMAN CANNOT DO IT.** Every other paint in this file goes
@@ -5514,14 +5581,19 @@ static void cg_composite_glyph_smoothed(CGContextRef c, const unsigned char *bit
 
 static void cg_show_one_glyph_fill(CGContextRef c, CGGlyph glyph, CGPoint pen, pixman_op_t op)
 {
-	unsigned char *coverage = NULL;
+	/* **THE COVERAGE IS BORROWED FROM THE GLYPH BITMAP CACHE, NOT OWNED BY THIS FUNCTION** (see
+	 * `cg_font_render_glyph_cached`): the same glyph at the same device size, pen phase, transform and smoothing is
+	 * the same picture, and a page of text asks for it many times over. Nothing here frees it, and nothing may —
+	 * the bytes live until the next glyph is rendered, which is after every consumer in this function has run. */
+	const unsigned char *coverage = NULL;
 	pixman_image_t *src, *cover;
 	pixman_color_t solid;
 	CGAffineTransform linear;
 	CGPoint device;
 	CGPoint fraction;
 	double a;
-	int w = 0, h = 0, left = 0, top = 0, dx, dy;
+	CGFloat font_size_px;
+	int w = 0, h = 0, left = 0, top = 0, dx = 0, dy = 0;
 	double advance = 0.0;
 	/* **SMOOTHING NEEDS THE ORDINARY `OVER` AND NOTHING ELSE**: the hand blend below knows one operator, and
 	 * every other mode (plus-darker, and the rest of pixman's) goes through the grey coverage it has always
@@ -5538,28 +5610,62 @@ static void cg_show_one_glyph_fill(CGContextRef c, CGGlyph glyph, CGPoint pen, p
 	linear = CGAffineTransformConcat(c->state.text_matrix, c->state.ctm);
 	linear.tx = 0.0;
 	linear.ty = 0.0;
+	/* **THE SIZE THE GLYPH IS RASTERISED AT IS A DEVICE SIZE, AND THE TRANSFORM IS ONLY A DIRECTION.** A font
+	 * size is in points; what the hinter needs is a count of DEVICE pixels per em, because that is the grid it
+	 * is fitting stems to. `linear` carries the product of the text matrix and the CTM — a scale, a rotation, a
+	 * shear — and FreeType applies it AFTER hinting, so handing the scale over inside it is a glyph hinted for
+	 * the wrong grid and then resampled onto the right one: MEASURED (Inter `H` at 13 points on a 2x output) the
+	 * old arithmetic put down 16x22 pixels of ink where a real 26-px em puts 16x20, nine per cent heavy, because
+	 * every stem was a 13-px hinting decision doubled. So the scale is DIVIDED OUT here and multiplied into the
+	 * em instead, and what is left in `linear` is a pure rotation/shear that hinting is right to ignore.
+	 *
+	 * THE MEAN OF THE TWO AXES IS THE SCALE rather than either one: a non-uniform text matrix is a stretch, and
+	 * the grid a glyph's stems want is the one its own advance is measured in. A degenerate matrix (a zero axis)
+	 * draws nothing, which the rasteriser already refuses. */
+	{
+		double sx = hypot(linear.a, linear.b);
+		double sy = hypot(linear.c, linear.d);
+		double scale = (sx + sy) / 2.0;
+
+		if (!(scale > 0.0)) {
+			return;
+		}
+		linear.a /= scale;
+		linear.b /= scale;
+		linear.c /= scale;
+		linear.d /= scale;
+		font_size_px = (CGFloat)((double)c->state.font_size * scale);
+	}
 	/* THE FRACTION GOES TO THE ENGINE AND THE WHOLE PART PLACES THE BITMAP: the pen's whole device
 	 * pixels position the mask (below, as before), and the leftover fraction is what the engine renders
 	 * the outline with — so a half-pixel pen draws a half-pixel-shifted glyph rather than the same one
-	 * twice. WITH POSITIONING OFF THE FRACTION IS ZERO, which is what rounding the pen IS. */
-	fraction.x = cg_subpixel_positioning(c) ? device.x - (CGFloat)cg_glyph_pen(device.x) : 0.0;
-	fraction.y = cg_subpixel_positioning(c) ? device.y - (CGFloat)cg_glyph_pen(device.y) : 0.0;
-	if (!cg_font_render_glyph(c->state.font, glyph, c->state.font_size, linear, fraction, smoothing,
-				  &coverage, &w, &h, &left, &top, &advance, &samples)) {
+	 * twice. WITH POSITIONING OFF THE FRACTION IS ZERO, which is what rounding the pen IS. AND WITH
+	 * QUANTISATION ON THE PEN IS FIRST SNAPPED TO A THIRD OR A QUARTER OF A PIXEL (see `cg_subpixel_quantum`),
+	 * which is a change to where the pen is taken to be rather than to where the ink goes: the whole part below
+	 * and the fraction here are both read from the same snapped value, so the two cannot disagree. */
+	{
+		double q = cg_subpixel_quantum(c);
+		double px = cg_glyph_quantised(device.x, q);
+		double py = cg_glyph_quantised(device.y, q);
+
+		fraction.x = cg_subpixel_positioning(c) ? px - (CGFloat)cg_glyph_pen(px) : 0.0;
+		fraction.y = cg_subpixel_positioning(c) ? py - (CGFloat)cg_glyph_pen(py) : 0.0;
+		dx = cg_glyph_pen(px);
+		dy = cg_glyph_pen(py);
+	}
+	if (!cg_font_render_glyph_cached(c->state.font, glyph, font_size_px, linear, fraction, smoothing,
+					 cg_text_ink(c), &coverage, &w, &h, &left, &top, &advance, &samples)) {
 		return;
 	}
 	if (w <= 0 || h <= 0) {
 		/* NO INK, WHICH IS NOT A FAILURE: a space advances and draws nothing. */
-		free(coverage);
 		return;
 	}
-	dx = cg_glyph_pen(device.x);
-	dy = cg_glyph_pen(device.y) - top;
+	dy -= top;
 	/* **THE ANSWER SAYS WHAT WAS RENDERED, NOT WHAT WAS ASKED FOR**: a glyph the engine could not turn comes
 	 * back grey, and it is blended as grey. */
 	if (samples == 3) {
 		cg_composite_glyph_smoothed(c, coverage, w, h, left, dx, dy);
-		free(coverage);
 		return;
 	}
 	dx += left;
@@ -5573,7 +5679,6 @@ static void cg_show_one_glyph_fill(CGContextRef c, CGGlyph glyph, CGPoint pen, p
 	 * — which is what the per-pixel bounds test used to do. */
 	cover = pixman_image_create_bits(PIXMAN_a8, w, h, NULL, 0);
 	if (cover == NULL) {
-		free(coverage);
 		return;
 	}
 	{
@@ -5586,7 +5691,6 @@ static void cg_show_one_glyph_fill(CGContextRef c, CGGlyph glyph, CGPoint pen, p
 			       (size_t)w);
 		}
 	}
-	free(coverage);
 	a = c->state.rgba[3] * c->state.alpha;
 	solid.red = (uint16_t)(cg_text_clamp01(c->state.rgba[0] * a) * 65535.0 + 0.5);
 	solid.green = (uint16_t)(cg_text_clamp01(c->state.rgba[1] * a) * 65535.0 + 0.5);

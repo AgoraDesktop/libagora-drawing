@@ -145,7 +145,13 @@ int cg_font_unregister(const char *path);
 int cg_font_is_registered(const char *path);
 
 /* ONE GLYPH RASTERISED ... see CGContext.c for how it is placed. */
-/* `delta` IS THE SUBPIXEL FRACTION OF THE PEN, IN DEVICE UNITS (x right, y down — the engine's own
+/* **`pixel_size` IS DEVICE PIXELS PER EM, WHICH IS NOT THE FONT SIZE.** A font size is in points and the
+ * transform is what turns points into pixels, so the caller derives this from its own transform and hands the
+ * rasteriser a GRID rather than a size (see CGContext.c's `cg_show_one_glyph_fill`). That is the whole of the
+ * correction: the engine hints against the size it is given, and `matrix` — a rotation and/or shear with the
+ * scale divided out — reaches it only AFTER hinting.
+ *
+ * `delta` IS THE SUBPIXEL FRACTION OF THE PEN, IN DEVICE UNITS (x right, y down — the engine's own
  * frame is handled inside). A whole-pixel caller passes (0,0) and gets the old behaviour; a caller
  * that has been asked not to subpixel-position passes (0,0) too, because rounding the pen IS that
  * setting.
@@ -155,11 +161,78 @@ int cg_font_is_registered(const char *path);
  * coverage is three samples to the pixel and 1 when it is grey, because a glyph the engine cannot turn
  * (a rotated one) is rendered grey and the caller has to blend what it actually got. With 3, the
  * bitmap is `*width` SAMPLES wide — three to a pixel, in sub-pixel order — and `*left` is in PIXELS,
- * as it is with 1. */
+ * as it is with 1.
+ *
+ * `*advance` IS IN DEVICE PIXELS AT THE SIZE GIVEN, and no caller places glyphs with it: the layout's advances are
+ * Core Text's, taken from the font's own metrics and unhinted (see CGContext.h). It is answered for the doors that
+ * ask the engine rather than kept in step with a pen.
+ *
+ * `ink` IS THE COVERAGE WARP'S POLARITY, and it is the caller's answer because the caller is the one that knows
+ * the fill colour: `CG_FONT_INK_NONE` leaves the coverage exactly as the engine rendered it, and the two
+ * polarities ask for the same warp at the strength that side of the contrast needs (`cg_font_coverage_warp`).
+ * IT IS APPLIED HERE, BEFORE THE CALLER BLENDS, because it is a property of the MASK and not of one compositing
+ * path: grey coverage is handed to pixman and sub-pixel coverage to a hand blend, so a warp applied at either
+ * of those would leave the other one out. */
+enum {
+	CG_FONT_INK_NONE = 0,
+	CG_FONT_INK_DARK = 1,
+	CG_FONT_INK_LIGHT = 2
+};
+
 int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size,
-                         CGAffineTransform matrix, CGPoint delta, int smoothing,
+                         CGAffineTransform matrix, CGPoint delta, int smoothing, int ink,
                          unsigned char **coverage, int *width, int *height, int *left, int *top,
                          double *advance, int *samples);
+
+/* **THE SAME RENDERING, REMEMBERED.** Same arguments and the same meaning for every out-parameter, with one
+ * difference that a caller has to know: `*coverage` is a BORROWED pointer into the cache and must not be freed.
+ * The bytes stay valid until the next call into this door (or `cg_font_glyph_cache_flush`, which drops everything),
+ * which is what a drawing pass wants — every glyph it renders is consumed before the next one is asked for.
+ *
+ * It exists because `cg_font_render_glyph` sets the face size, rasterises and warps PER CALL, and a page of text or
+ * a terminal's grid asks for the same few dozen pictures thousands of times. The key is the engine's own input in the
+ * engine's own precision (face, glyph, 26.6 device size, four 16.16 matrix factors, two 26.6 deltas, smoothing, ink
+ * polarity), so a hit is a rendering the engine would have reproduced byte for byte. A REFUSAL IS NOT CACHED: the
+ * renderer's zero comes back as a zero and is retried next time, which keeps its diagnostic on stderr.
+ *
+ * ALLOCATION FAILURE IS A REFUSAL rather than a half-kept rendering: the door's promise is a pointer the caller must
+ * not free, so there is nowhere to put a picture that could not be recorded, and handing one over unrecorded would
+ * leak it. It answers zero and says so, like every other refusal in this file. */
+int cg_font_render_glyph_cached(CGFontRef font, CGGlyph glyph, CGFloat pixel_size,
+                                CGAffineTransform matrix, CGPoint delta, int smoothing, int ink,
+                                const unsigned char **coverage, int *width, int *height, int *left,
+                                int *top, double *advance, int *samples);
+
+/* **THE CACHE'S THREE PROBE DOORS.** `set_budget` replaces the `CG_GLYPH_CACHE_BYTES` default (bytes; 0 turns
+ * caching off but NOT the borrow contract — every rendering then lives in the one-slot holder), `flush` empties the
+ * cache, and `stats` answers what is in it now and what it has done since the last flush. A flush zeroes the
+ * counters as well, because "forget what you know" and "how hard did you work" are the two questions a probe asks
+ * and the second is unanswerable after the first if the counts survive. */
+typedef struct {
+	unsigned long hits;
+	unsigned long misses;
+	unsigned long evictions;
+	unsigned entries;
+	size_t bytes;
+	size_t budget;
+} CGGlyphCacheStats;
+
+void cg_font_glyph_cache_set_budget(size_t bytes);
+void cg_font_glyph_cache_flush(void);
+void cg_font_glyph_cache_stats(CGGlyphCacheStats *stats);
+
+/* **THE COVERAGE WARP'S EXPONENT, ASKED AS A NUMBER SO THAT IT CAN BE MEASURED RATHER THAN TRUSTED.** `ppem` is
+ * DEVICE pixels per em and `ink` is one of the two polarities above; the answer is the exponent
+ * `cg_font_render_glyph` raises each coverage sample to — 1.0 at and above the size where an antialiased stem is
+ * thick enough not to thin, and lower (for BOTH polarities, which is the non-obvious half: see the definition)
+ * the smaller the text. */
+double cg_font_coverage_warp(double ppem, int ink);
+
+/* **THE LCD FILTER THE RASTERISER CHOOSES FOR A DEVICE SIZE, ASKED THE SAME WAY.** The engine's five-tap FIR is
+ * the right convolution of a monitor's phosphors and the three-tap is the right one for a stem that is barely a
+ * pixel wide (the measurement is in CGFont.c); the answer is a `FT_LcdFilter` value, which this header states as
+ * an int so that nothing outside the one file includes `<ft2build.h>`. */
+int cg_font_lcd_filter_for(double ppem);
 
 /* **A UNICODE CODEPOINT'S GLYPH, WHICH IS THE ENGINE'S CHARACTER MAP AND NOT A NAME LOOKUP.** It is the door a
  * PDF reader needs for a simple font whose /Encoding is a standard one: the encoding maps a byte to a character,

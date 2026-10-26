@@ -667,8 +667,15 @@ void CGContextSetCharacterSpacing(CGContextRef context, CGFloat spacing);
  * (`kCGImageAlphaNoneSkipFirst` and its byte-order twin) — it is what an opaque window's surface IS, and the
  * AppKit makes its window one.
  *
- * QUANTISATION IS STILL REFUSED BY NAME, because the header says a context "quantizes subpixel positions" and
- * NEVER SAYS TO WHAT — choosing a quantum would be inventing a contract rather than duplicating one. */
+ * **AND QUANTISATION IS IMPLEMENTED, BECAUSE THE HEADER ASKS FOR IT AND THE COST OF NOT HAVING IT WAS THE THING IT
+ * EXISTS FOR.** This file used to say the two doors were refused by name because the header says a context
+ * "quantizes subpixel positions" and never says TO WHAT — which is true, and which is answered rather than declined
+ * now: a THIRD of a pixel for sub-pixel coverage, where a third is a sub-column, and a QUARTER for grey, where there
+ * are no sub-columns and a quarter is the finest step that still repeats. Those are the numbers the field converged
+ * on, and the reason they matter is not arithmetic: an unquantised pen gives every glyph its own hinting decision,
+ * so the same letter shimmered by a few hundredths of a pixel from one frame to the next, and no mask could ever be
+ * reused. Both doors default ON, as the system this library duplicates has them, and closing either one restores the
+ * exact fraction. */
 void CGContextSetAllowsFontSubpixelPositioning(CGContextRef context, bool allows);
 void CGContextSetShouldSubpixelPositionFonts(CGContextRef context, bool should);
 void CGContextSetAllowsFontSmoothing(CGContextRef context, bool allows);
