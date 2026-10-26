@@ -80,11 +80,18 @@ character). The door's contract is unchanged (font units, a batch refused whole 
 caller's array untouched in that case) and the per-font counters are how the test proves the second ask was the
 cached one rather than believing a clock.
 
-**WHAT IS LEFT IS THE PAINT, NOT THE FONT, MEASURED THE SAME DAY.** Of the 0.94 µs a warm grey glyph now costs, the
-mapping and the advance are 95 ns and the compositing is the rest: a pixman mask image built and filled per glyph, a
-solid-fill image per glyph, and `pixman_image_composite32` over the glyph's box. With SMOOTHING ON it is ~2.1 µs a
-glyph, because sub-pixel coverage goes through this file's hand blend rather than pixman. Those are the next two
-things worth the same treatment, and they are named in "What is not done".
+**AND THE PAINT NO LONGER BUILDS A GLYPH'S IMAGES EITHER, WHICH IS THE SECOND HALF OF THE SAME IDEA.** A mask and a
+solid-fill image were allocated and released PER GLYPH — for a box the next glyph usually shares and a colour a whole
+run shares. Both are scratch on the context now: the a8 mask GROWS to fit the largest glyph drawn and is refilled in
+place, and the solid image is rebuilt only when the colour changes, so a terminal or a page of body text builds it
+once. The sub-pixel blend was also asking pixman's region code whether it contained a point once per SAMPLE — three
+times per pixel, for an answer the three sub-columns of one pixel cannot disagree about — and it now walks pixels.
+
+MEASURED (2026, best of five, baseline subtracted, same 47-character run through `CGContextShowTextAtPoint` at
+13 px): a warm grey glyph **617–658 ns → 447–454 ns** (about 29% less) and a sub-pixel one **1998–2110 ns → 1560–1606
+ns** (about 24%). For a terminal that is a 2000-cell repaint at ~0.9 ms grey or ~3.2 ms with smoothing, against
+~1.3 ms and ~4.2 ms before. What remains is the composite itself and the full-window damage the seam still asks for
+(see "What is not done").
 
 ## Status
 
@@ -254,14 +261,13 @@ been converted back to CF", with lcms2 "not installed on this machine").
 
 ### What is not done
 
-- **GLYPH MASKS AND GLYPH ADVANCES ARE CACHED; THE COMPOSITING IS NOT.** `cg_font_render_glyph_cached` remembers a
-  rendering (see "The glyph bitmap cache" above) and `CGFontGetGlyphAdvances` remembers an advance per glyph on the
-  font, which is where the 713 ns went. What a warm grey glyph still costs is its PAINT, and it is the paint that
-  allocates: `cg_show_one_glyph_fill` builds a pixman a8 mask image and copies the coverage into it, builds a 1×1
-  solid-fill image, and composites the glyph's box — per glyph, per draw. None of that is size-free or glyph-free, so
-  none of it is a cache: the mask image could be a per-context scratch buffer refilled in place, the solid fill could
-  be kept until the colour changes, and sub-pixel coverage could stop going through the hand blend (~2.1 µs a glyph
-  against ~0.7 grey). Named and measured rather than guessed at.
+- **THE GLYPH'S BITMAP, ADVANCE AND PAINT IMAGES ARE ALL KEPT; THE COMPOSITE ITSELF IS NOT.** A warm grey glyph now
+  costs ~0.45 µs and a sub-pixel one ~1.56 µs (measured, see above), of which the mask copy, the composite and — for
+  sub-pixel coverage — this file's hand blend are the whole of it. What is still missing is not a cache but a change of
+  SHAPE: the hand blend could write three channels at once instead of per sample, and a terminal-style caller would
+  rather have a glyph ATLAS (the pictures drawn once into one surface, then blitted) than one composite per glyph.
+  Neither is blocked on anything; both are bigger than the reuse this file does now, and neither is required by
+  anything in the tree yet.
 - **TEXT AS OUTLINES IS OUTSIDE BOTH CACHES.** PDF embedding and text-as-path use `cg_font_glyph_outline`, which
   neither cache covers — a PDF places each glyph once, and a stroked or clipped glyph is geometry rather than a
   mask, so there is nothing to reuse in either.

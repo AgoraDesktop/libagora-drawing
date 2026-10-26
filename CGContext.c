@@ -228,6 +228,21 @@ struct CGContext {
 	int stack_cap;
 
 	struct CGPath *path;
+
+	/* **THE TWO IMAGES A GLYPH'S PAINT USED TO BUILD, KEPT AND REFILLED.** A pixman mask for a glyph's box and a
+	 * solid-fill image for its colour were allocated and released PER GLYPH — 100 ns of `pixman_image_create_bits`
+	 * plus a fill, for a box that the next glyph usually shares — and text is thousands of glyphs.
+	 *
+	 * BOTH ARE SCRATCH AND NEITHER IS STATE, which is why they are here rather than in `cg_state`: a `-saveGState`
+	 * must not copy a cache, and a `-restoreGState` must not free one. The mask GROWS (a glyph bigger than the
+	 * image replaces it) and its contents are overwritten before every use, so the stale bytes outside the glyph's
+	 * box are never read. The solid image is REPLACED ONLY WHEN THE COLOUR CHANGES, which for a run of one colour
+	 * — a terminal, a menu, a page of body text — means it is built once. */
+	pixman_image_t *glyph_mask;
+	int glyph_mask_width;
+	int glyph_mask_height;
+	pixman_image_t *glyph_solid;
+	pixman_color_t glyph_solid_colour;	/* the colour `glyph_solid` was built from */
 };
 
 /* THE RECORDER'S VIEW OF THE GRAPHICS STATE, taken at the moment something is painted. The writer emits it
@@ -739,6 +754,12 @@ void CGContextRelease(CGContextRef c)
 	pixman_region32_fini(&c->state.clip);
 	if (c->image != NULL) {
 		pixman_image_unref(c->image);
+	}
+	if (c->glyph_mask != NULL) {
+		pixman_image_unref(c->glyph_mask);
+	}
+	if (c->glyph_solid != NULL) {
+		pixman_image_unref(c->glyph_solid);
 	}
 	if (c->path != NULL) {
 		CGPathRelease((CGPathRef)c->path);
@@ -5515,6 +5536,59 @@ static double cg_subpixel_quantum(CGContextRef c)
  * glyph JITTERED by four tenths of a pixel as the pen moved, which is a wobble a reader sees as uneven spacing.
  * The samples of a pixel are its three sub-pixels, in order, so sample `3k + c` is channel `c` of pixel `left + k`
  * and no remainder is involved at all. */
+/* **THE MASK IMAGE, REUSED.** An a8 image at least `w` by `h`, grown when a glyph does not fit and never shrunk:
+ * glyph boxes at one size vary by a pixel or two, so a scratch that only grew would still be rebuilt on every
+ * wider letter if it tracked the box EXACTLY. The composite is given `w`/`h` explicitly, so a larger image costs
+ * nothing but the bytes.
+ *
+ * THE STRIDE IS THE IMAGE'S OWN and is read back by the caller, which is the rule this file already keeps for an
+ * a8 mask (`CGContextClipToMask`'s four-byte stride note): pixman rounds a mask's row up and the copy has to
+ * follow. */
+static pixman_image_t *fn_glyph_mask(CGContextRef c, int w, int h)
+{
+	if (c->glyph_mask == NULL || c->glyph_mask_width < w || c->glyph_mask_height < h) {
+		int width = (c->glyph_mask_width > w) ? c->glyph_mask_width : w;
+		int height = (c->glyph_mask_height > h) ? c->glyph_mask_height : h;
+		pixman_image_t *grown = pixman_image_create_bits(PIXMAN_a8, width, height, NULL, 0);
+
+		if (grown == NULL) {
+			return NULL;
+		}
+		if (c->glyph_mask != NULL) {
+			pixman_image_unref(c->glyph_mask);
+		}
+		c->glyph_mask = grown;
+		c->glyph_mask_width = width;
+		c->glyph_mask_height = height;
+	}
+	return c->glyph_mask;
+}
+
+/* **AND THE SOLID IMAGE, REBUILT ONLY WHEN THE COLOUR MOVES.** `pixman_image_create_solid_fill` is an allocation
+ * and a colour conversion; a run of text in one colour used to pay for both on every glyph. The comparison is on
+ * the sixteen-bit components the conversion produced, which is exactly what the drawing depends on — two colours
+ * that differ only below that precision are the same ink here, so they share the image. */
+static pixman_image_t *fn_glyph_solid(CGContextRef c, const pixman_color_t *colour)
+{
+	if (c->glyph_solid != NULL &&
+	    memcmp(&c->glyph_solid_colour, colour, sizeof(*colour)) == 0) {
+		return c->glyph_solid;
+	}
+	{
+		pixman_image_t *fresh = pixman_image_create_solid_fill(colour);
+
+		if (fresh == NULL) {
+			return NULL;
+		}
+		if (c->glyph_solid != NULL) {
+			pixman_image_unref(c->glyph_solid);
+		}
+		c->glyph_solid = fresh;
+		c->glyph_solid_colour = *colour;
+	}
+	return c->glyph_solid;
+}
+
 static void cg_composite_glyph_smoothed(CGContextRef c, const unsigned char *bitmap, int nsamples,
 					int rows, int left, int dx, int dy)
 {
@@ -5538,16 +5612,23 @@ static void cg_composite_glyph_smoothed(CGContextRef c, const unsigned char *bit
 	for (row = 0; row < rows; row++) {
 		const unsigned char *srow = bitmap + (size_t)row * (size_t)nsamples;
 		int y = dy + row;
+		int pixels = nsamples / 3;	/* sub-pixel coverage: three samples to the pixel, in channel order */
+		int column;
 
 		if (y < 0 || y >= c->height) {
 			continue;
 		}
-		for (sample = 0; sample < nsamples; sample++) {
-			int column = left + sample / 3;		/* sample 3k+c is channel c of pixel left + k */
-			int channel = sample % 3;
-			int x = dx + column;
+		/* **THE PIXEL IS THE UNIT OF EVERY QUESTION THIS LOOP ASKS.** The clip is per pixel, the mask is per pixel,
+		 * and a destination pointer is per pixel — but the loop used to walk SAMPLES, so each of those was asked
+		 * three times for an answer that cannot vary between a pixel's three sub-columns, and the sample's pixel
+		 * index was a division. The arithmetic below is the same arithmetic in the same order (a drawing test
+		 * compares bytes, so a reassociated product would be a changed pixel). */
+		for (column = 0; column < pixels; column++) {
+			const unsigned char *samples = srow + (size_t)column * 3u;
+			int x = dx + left + column;
 			unsigned char *d;
-			double k, dst;
+			double mask = 1.0;
+			int channel;
 
 			if (x < 0 || x >= c->width) {
 				continue;
@@ -5555,7 +5636,6 @@ static void cg_composite_glyph_smoothed(CGContextRef c, const unsigned char *bit
 			if (!pixman_region32_contains_point(&c->state.clip, x, y, NULL)) {
 				continue;
 			}
-			k = a * (double)srow[sample] / 255.0;
 			if (mbits != NULL) {
 				/* A MASK IS ONE COVERAGE PER PIXEL, so it scales all three of that pixel's samples alike — and
 				 * a pixel outside the mask's own box reads as coverage 0, which is what a mask IS. */
@@ -5565,16 +5645,24 @@ static void cg_composite_glyph_smoothed(CGContextRef c, const unsigned char *bit
 				if (mx < 0 || my < 0 || mx >= mw || my >= mh) {
 					continue;
 				}
-				k *= (double)mbits[(size_t)my * (size_t)mstride + (size_t)mx] / 255.0;
-			}
-			if (k <= 0.0) {
-				continue;
+				mask = (double)mbits[(size_t)my * (size_t)mstride + (size_t)mx] / 255.0;
 			}
 			d = c->data + (size_t)y * (size_t)c->stride + (size_t)x * 4u;
-			/* THE DESTINATION IS OPAQUE — that is the gate this path is entered under — so its bytes ARE its
-			 * colours and the blend is the ordinary one: dst = colour*k + dst*(1 - k), per channel. */
-			dst = (double)d[slot[channel]] / 255.0;
-			d[slot[channel]] = cg_blend_byte(colour[channel] * k + dst * (1.0 - k));
+			for (channel = 0; channel < 3; channel++) {
+				double k = a * (double)samples[channel] / 255.0;
+				double dst;
+
+				if (mbits != NULL) {
+					k *= mask;
+				}
+				if (k <= 0.0) {
+					continue;
+				}
+				/* THE DESTINATION IS OPAQUE — that is the gate this path is entered under — so its bytes ARE
+				 * its colours and the blend is the ordinary one: dst = colour*k + dst*(1 - k), per channel. */
+				dst = (double)d[slot[channel]] / 255.0;
+				d[slot[channel]] = cg_blend_byte(colour[channel] * k + dst * (1.0 - k));
+			}
 		}
 	}
 }
@@ -5677,7 +5765,7 @@ static void cg_show_one_glyph_fill(CGContextRef c, CGGlyph glyph, CGPoint pen, p
 	 * the glyph's own area, and the box lands EXACTLY where it did: the mask is placed at `dx`/`dy` by the
 	 * destination coordinates instead of by the copy loop, and pixman clips whatever falls off the surface
 	 * — which is what the per-pixel bounds test used to do. */
-	cover = pixman_image_create_bits(PIXMAN_a8, w, h, NULL, 0);
+	cover = fn_glyph_mask(c, w, h);
 	if (cover == NULL) {
 		return;
 	}
@@ -5696,9 +5784,8 @@ static void cg_show_one_glyph_fill(CGContextRef c, CGGlyph glyph, CGPoint pen, p
 	solid.green = (uint16_t)(cg_text_clamp01(c->state.rgba[1] * a) * 65535.0 + 0.5);
 	solid.blue = (uint16_t)(cg_text_clamp01(c->state.rgba[2] * a) * 65535.0 + 0.5);
 	solid.alpha = (uint16_t)(cg_text_clamp01(a) * 65535.0 + 0.5);
-	src = pixman_image_create_solid_fill(&solid);
+	src = fn_glyph_solid(c, &solid);
 	if (src == NULL) {
-		pixman_image_unref(cover);
 		return;
 	}
 	pixman_image_set_clip_region32(c->image, &c->state.clip);
@@ -5725,8 +5812,8 @@ static void cg_show_one_glyph_fill(CGContextRef c, CGGlyph glyph, CGPoint pen, p
 	} else {
 		cg_composite(c, op, src, cover, 0, 0, 0, 0, dx, dy, w, h);
 	}
-	pixman_image_unref(src);
-	pixman_image_unref(cover);
+	/* NOTHING IS RELEASED: `src` and `cover` are the context's scratch images, and the next glyph overwrites
+	 * them. See the note on the two fields. */
 }
 
 /* THE REFUSALS, IN ONE PLACE: every text door draws through `cg_show_one_glyph`, so the conditions are
