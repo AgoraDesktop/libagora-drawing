@@ -50,6 +50,17 @@ target_compile_definitions(glyph_advances PRIVATE
   AGORA_TEST_FONT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../fonts")
 
 add_test(NAME glyph-advances COMMAND glyph_advances)
+
+# **COLOUR GLYPHS: A PICTURE RATHER THAN A MASK.** A face with no outlines (Noto Color Emoji is a single bitmap
+# strike), the em grid and vertical metrics the sfnt still reports, the surrogate pair that maps to one glyph, the
+# strike scaled to the size the caller asked for, the four premultiplied channels, the cache's bill for them, and
+# the pixels a bitmap context receives under a BLACK fill. The face is the HOST's, so the case SKIPS with 77 when no
+# colour family is installed — the rule `pdf-cff` and `eps-write` already use for their tools.
+add_executable(colour_glyphs colour_glyphs.c)
+target_link_libraries(colour_glyphs PRIVATE Drawing CoreFoundation::CoreFoundation)
+
+add_test(NAME colour-glyphs COMMAND colour_glyphs)
+set_tests_properties(colour-glyphs PROPERTIES SKIP_RETURN_CODE 77)
 # The library's own dependencies (libobjc and Core Foundation's) live in the install prefix, and DT_RUNPATH is
 # NOT inherited by a transitive dependency — so the prefix's lib directory has to be on `LD_LIBRARY_PATH` for
 # the hops to resolve. The directories come from imported targets rather than being written down.
@@ -62,6 +73,8 @@ set_tests_properties(fonts PROPERTIES ENVIRONMENT
 set_tests_properties(glyph-cache PROPERTIES ENVIRONMENT
   "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")
 set_tests_properties(glyph-advances PROPERTIES ENVIRONMENT
+  "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")
+set_tests_properties(colour-glyphs PROPERTIES ENVIRONMENT
   "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")
 
 # THE PDF READER: two fixtures built byte by byte (a classic cross-reference table and a PDF 1.5 xref stream with

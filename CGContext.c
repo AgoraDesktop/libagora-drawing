@@ -5667,6 +5667,78 @@ static void cg_composite_glyph_smoothed(CGContextRef c, const unsigned char *bit
 	}
 }
 
+/* **A COLOUR GLYPH IS A PICTURE, AND ITS INK IS THE PICTURE'S OWN.** Everything above this line is a MASK: one
+ * colour is chosen by the caller and each pixel says how much of it lands. A colour glyph is the opposite — four
+ * premultiplied channels per pixel, blue first, and nothing the caller's fill colour can add to them. So it has its
+ * own composite: the source's components go down as they are, the destination is attenuated by the source's ALPHA
+ * and by the context's global alpha (`CGContextSetAlpha` still means what it says), and the clip and the clip mask
+ * are the same two tests the smoothed path makes.
+ *
+ * THE FILL COLOUR IS IGNORED AND THAT IS APPLE'S BEHAVIOUR, not a shortcut: a colour glyph has no ink colour to
+ * choose. The GLOBAL alpha is not the fill colour's and is honoured — it scales every mark a context makes.
+ *
+ * PREMULTIPLIED IS WHY THE ARITHMETIC IS THIS SHORT: the source's three channels already carry their own coverage,
+ * so `dst = src * k + dst * (1 - a * k)` per channel is the whole blend, with no division and no colour bleed at
+ * the edges of the picture. */
+static void cg_composite_glyph_colour(CGContextRef c, const unsigned char *pixels, int w, int rows,
+				      int dx, int dy)
+{
+	int slot[3];
+	double alpha = c->state.alpha;
+	const unsigned char *mbits = NULL;
+	int mstride = 0, mw = 0, mh = 0;
+	int row, column;
+
+	cg_channel_slots(c->bitmap_info, slot);
+	if (c->state.clip_mask != NULL) {
+		mbits = (const unsigned char *)pixman_image_get_data(c->state.clip_mask);
+		mstride = pixman_image_get_stride(c->state.clip_mask);
+		mw = pixman_image_get_width(c->state.clip_mask);
+		mh = pixman_image_get_height(c->state.clip_mask);
+	}
+	for (row = 0; row < rows; row++) {
+		const unsigned char *srow = pixels + (size_t)row * (size_t)w * 4u;
+		int y = dy + row;
+
+		if (y < 0 || y >= c->height) {
+			continue;
+		}
+		for (column = 0; column < w; column++) {
+			const unsigned char *p = srow + (size_t)column * 4u;
+			int x = dx + column;
+			double mask = 1.0;
+			double a, k;
+			unsigned char *d;
+
+			if (x < 0 || x >= c->width || p[3] == 0) {
+				continue;
+			}
+			if (!pixman_region32_contains_point(&c->state.clip, x, y, NULL)) {
+				continue;
+			}
+			if (mbits != NULL) {
+				int mx = x - c->state.clip_mask_x;
+				int my = y - c->state.clip_mask_y;
+
+				if (mx < 0 || my < 0 || mx >= mw || my >= mh) {
+					continue;
+				}
+				mask = (double)mbits[(size_t)my * (size_t)mstride + (size_t)mx] / 255.0;
+			}
+			a = (double)p[3] / 255.0 * alpha * mask;
+			if (a <= 0.0) {
+				continue;
+			}
+			k = 1.0 - a;
+			d = c->data + (size_t)y * (size_t)c->stride + (size_t)x * 4u;
+			/* B, G, R, A in memory; slot[] maps the destination's own channel order ONCE (see cg_channel_slots). */
+			d[slot[0]] = cg_blend_byte((double)p[2] / 255.0 * alpha * mask + (double)d[slot[0]] / 255.0 * k);
+			d[slot[1]] = cg_blend_byte((double)p[1] / 255.0 * alpha * mask + (double)d[slot[1]] / 255.0 * k);
+			d[slot[2]] = cg_blend_byte((double)p[0] / 255.0 * alpha * mask + (double)d[slot[2]] / 255.0 * k);
+		}
+	}
+}
+
 /* THE TWO DOORS THE RUN PAINTER REACHES, declared before it because both are defined further down this file: the
  * refusal check every text door asks (`cg_text_can_draw`) and the per-mode dispatch a fallback goes through
  * (`cg_show_glyph_mode`). */
@@ -5700,6 +5772,16 @@ static int cg_glyph_place(CGContextRef c, CGGlyph glyph, CGPoint pen, int smooth
 	double advance = 0.0;
 	int smoothing = smoothing_in;
 	int samples = 1;
+
+	/* **A FACE WITH COLOUR GLYPHS IS NOT SUB-PIXEL ANTIALIASED**, and asking for it would be worse than useless: the
+	 * request is part of the glyph cache's key, so the same emoji would be rendered twice and cached twice for a
+	 * flag the renderer has to discard anyway (a picture has no sub-pixel columns). The face answers the question
+	 * before the render, which is why `cg_font_has_colour` exists beside the sample count. A face that mixes
+	 * colour and ordinary glyphs loses sub-pixel coverage for the ordinary ones; the per-glyph answer would need
+	 * the cache key to lie about what was asked, and this is the smaller wrong. */
+	if (smoothing && cg_font_has_colour(c->state.font)) {
+		smoothing = 0;
+	}
 
 	/* THE PEN, PLUS THE TEXT MATRIX'S TRANSLATION: the matrix's SCALE and ROTATION are already in
 	 * `linear` below (they rasterise the glyph), and its TRANSLATION is the one part that moves the
@@ -5778,14 +5860,84 @@ static int cg_place_pixels(const struct cg_glyph_place *place)
 	return (place->samples == 3) ? (place->width / 3) : place->width;
 }
 
-/* **ONE GLYPH, PAINTED ON ITS OWN.** The shape every fallback uses: a clip mask, a stroke or clip text mode, and a
- * glyph whose samples disagree with the run it is in. Its two paths are the two this file has always had. */
+/* **ONE COVERAGE MASK, PAINTED IN THE CONTEXT'S INK.** The tail of every mask path: the solid colour image, the
+ * clip, and the two operators that can be expressed (over through pixman's source, plus-darker by hand). Extracted
+ * because the colour case needs it too when the operator is not `over` — a picture whose alpha is the only coverage
+ * there is. */
+static void cg_paint_coverage(CGContextRef c, pixman_image_t *cover, int w, int h, int x0, int y0,
+			      pixman_op_t op)
+{
+	pixman_image_t *src;
+	pixman_color_t solid;
+	double a = c->state.rgba[3] * c->state.alpha;
+
+	solid.red = (uint16_t)(cg_text_clamp01(c->state.rgba[0] * a) * 65535.0 + 0.5);
+	solid.green = (uint16_t)(cg_text_clamp01(c->state.rgba[1] * a) * 65535.0 + 0.5);
+	solid.blue = (uint16_t)(cg_text_clamp01(c->state.rgba[2] * a) * 65535.0 + 0.5);
+	solid.alpha = (uint16_t)(cg_text_clamp01(a) * 65535.0 + 0.5);
+	src = fn_glyph_solid(c, &solid);
+	if (src == NULL) {
+		return;
+	}
+	pixman_image_set_clip_region32(c->image, &c->state.clip);
+	if (op == CG_OP_PLUS_DARKER) {
+		/* PIXMAN'S SOLID-FILL SOURCE HAS NO READABLE BITS and the hand composite needs them, so for
+		 * plus-darker the glyph's colour is handed over as the SAME 1x1 a8r8g8b8 image every other
+		 * paint of a colour already uses (`cg_fill_path`), which the loop reads and repeats. */
+		uint32_t pixel = cg_premultiplied_pixel(c->state.rgba[0], c->state.rgba[1],
+							c->state.rgba[2], a);
+		pixman_image_t *bits = pixman_image_create_bits(PIXMAN_a8r8g8b8, 1, 1, &pixel, 4);
+
+		if (bits != NULL) {
+			pixman_image_set_repeat(bits, PIXMAN_REPEAT_NORMAL);
+			cg_composite(c, op, bits, cover, 0, 0, 0, 0, x0, y0, w, h);
+			pixman_image_unref(bits);
+		}
+	} else {
+		cg_composite(c, op, src, cover, 0, 0, 0, 0, x0, y0, w, h);
+	}
+}
+
+/* **A COLOUR PICTURE UNDER AN OPERATOR THAT CANNOT TAKE PREMULTIPLIED COLOUR.** `CG_OP_PLUS_DARKER` and the other
+ * non-`over` operators are hand loops over ONE source colour; a four-channel picture has four. The honest
+ * degradation is to use the picture's ALPHA as the coverage and the caller's ink as the colour, which is what a
+ * monochrome renderer of the same glyph would have produced — the shape in the right place, in the right colour,
+ * without the picture's own. */
+static void cg_paint_colour_coverage(CGContextRef c, const struct cg_glyph_place *place, pixman_op_t op)
+{
+	pixman_image_t *cover = fn_glyph_mask(c, place->width, place->height);
+	uint8_t *cd;
+	int cs, row, column;
+
+	if (cover == NULL) {
+		return;
+	}
+	cd = (uint8_t *)pixman_image_get_data(cover);
+	cs = pixman_image_get_stride(cover);
+	for (row = 0; row < place->height; row++) {
+		for (column = 0; column < place->width; column++) {
+			cd[(size_t)row * (size_t)cs + (size_t)column] =
+				place->coverage[((size_t)row * (size_t)place->width + (size_t)column) * 4u + 3u];
+		}
+	}
+	cg_paint_coverage(c, cover, place->width, place->height, place->x, place->y, op);
+}
+
+/* **ONE GLYPH, PAINTED ON ITS OWN.** The shape every fallback uses: a clip mask, a stroke or clip text mode, a
+ * glyph whose samples disagree with the run it is in, and a COLOUR glyph, which has no coverage to batch at all. */
 static void cg_paint_one_glyph(CGContextRef c, const struct cg_glyph_place *place, pixman_op_t op)
 {
-	pixman_image_t *src, *cover;
-	pixman_color_t solid;
-	double a;
+	pixman_image_t *cover;
 
+	if (place->samples == 4) {
+		if (op == PIXMAN_OP_OVER) {
+			cg_composite_glyph_colour(c, place->coverage, place->width, place->height,
+						  place->x, place->y);
+		} else {
+			cg_paint_colour_coverage(c, place, op);
+		}
+		return;
+	}
 	if (place->samples == 3) {
 		/* THE BEARING IS ALREADY IN `place->x` (the placement folded it in), so the smoothed blend is given a zero
 		 * offset and the absolute device column — its own arithmetic is `x = dx + left + sample/3`, which is the
@@ -5807,34 +5959,7 @@ static void cg_paint_one_glyph(CGContextRef c, const struct cg_glyph_place *plac
 			       place->coverage + (size_t)row * (size_t)place->width, (size_t)place->width);
 		}
 	}
-	a = c->state.rgba[3] * c->state.alpha;
-	solid.red = (uint16_t)(cg_text_clamp01(c->state.rgba[0] * a) * 65535.0 + 0.5);
-	solid.green = (uint16_t)(cg_text_clamp01(c->state.rgba[1] * a) * 65535.0 + 0.5);
-	solid.blue = (uint16_t)(cg_text_clamp01(c->state.rgba[2] * a) * 65535.0 + 0.5);
-	solid.alpha = (uint16_t)(cg_text_clamp01(a) * 65535.0 + 0.5);
-	src = fn_glyph_solid(c, &solid);
-	if (src == NULL) {
-		return;
-	}
-	pixman_image_set_clip_region32(c->image, &c->state.clip);
-	if (op == CG_OP_PLUS_DARKER) {
-		/* PIXMAN'S SOLID-FILL SOURCE HAS NO READABLE BITS and the hand composite needs them, so for
-		 * plus-darker the glyph's colour is handed over as the SAME 1x1 a8r8g8b8 image every other
-		 * paint of a colour already uses (`cg_fill_path`), which the loop reads and repeats. */
-		uint32_t pixel = cg_premultiplied_pixel(c->state.rgba[0], c->state.rgba[1],
-							c->state.rgba[2], a);
-		pixman_image_t *bits = pixman_image_create_bits(PIXMAN_a8r8g8b8, 1, 1, &pixel, 4);
-
-		if (bits != NULL) {
-			pixman_image_set_repeat(bits, PIXMAN_REPEAT_NORMAL);
-			cg_composite(c, op, bits, cover, 0, 0, 0, 0, place->x, place->y,
-				     place->width, place->height);
-			pixman_image_unref(bits);
-		}
-	} else {
-		cg_composite(c, op, src, cover, 0, 0, 0, 0, place->x, place->y,
-			     place->width, place->height);
-	}
+	cg_paint_coverage(c, cover, place->width, place->height, place->x, place->y, op);
 }
 
 /* **THE OVERLAP RULE, AND WHY IT IS ABOUT INK RATHER THAN BOXES.** Two glyphs whose BOXES overlap cannot share one
@@ -6090,6 +6215,19 @@ static void cg_paint_glyph_run(CGContextRef c, const CGGlyph glyphs[], const CGP
 		struct cg_glyph_place place;
 
 		if (!cg_glyph_place(c, glyphs[i], positions[i], smoothing, &place)) {
+			continue;
+		}
+		/* **A COLOUR GLYPH CANNOT JOIN A COVERAGE STRIP, SO THE STRIP ENDS FIRST.** The batch below builds ONE a8 mask
+		 * and paints it in ONE ink, which is exactly what a four-channel picture is not; so a colour glyph flushes
+		 * whatever is pending (painting it in order, not after the emoji) and goes through the single-glyph path. */
+		if (place.samples == 4) {
+			if (npending > 0) {
+				cg_flush_glyph_run(c, pending, npending, op);
+				npending = 0;
+				monotone = 1;
+				max_right = 0;
+			}
+			cg_paint_one_glyph(c, &place, op);
 			continue;
 		}
 		if (npending > 0 &&

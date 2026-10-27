@@ -111,3 +111,33 @@ table. The file is checked for first and its absence is REPORTED rather than cou
 existing rule.
 
 `README.md` records what is still not done.
+
+**Colour glyphs, and the strike that stands in for outlines (2026-10-26).** `cg_font_render_glyph` understood two
+coverage formats — grey and sub-pixel — and printed `CG-REFUSE: this font renders glyph coverage this library cannot
+use` for anything else, which included the only format a colour font emits. Three separate facts had to be true before
+an emoji could be drawn, and the third one is why the first two were not enough:
+
+1. **The rasteriser had to accept `FT_PIXEL_MODE_BGRA`** — four premultiplied channels, blue first, `width` counted in
+   pixels — and report `*samples = 4`, the value `CGContext.c` reads as "a picture, not a mask". `FT_LOAD_COLOR` is
+   asked for whenever a bitmap may be used at all (a no-op for a monochrome glyph), and `FT_Render_Glyph` is skipped
+   when the load already produced a bitmap, because a strike is already a picture.
+2. **The paint had to be its own composite.** A run of text is one a8 mask in one colour; a picture is neither, so a
+   colour glyph ends the pending batch and is composited by `cg_composite_glyph_colour`, whose arithmetic is the
+   premultiplied blend. The fill colour is ignored (that is Apple's behaviour) and the global alpha is not (it is not
+   the fill colour's).
+3. **The face had to have metrics, and a bitmap face does not.** Noto Color Emoji reports `units_per_EM == 0` and zero
+   ascender and descender, so `CTFont`'s `size / upem` scale was zero and `CTShaperCreate` refused the face outright;
+   and `FT_Set_Char_Size` on a strike-only face selects nothing, so the glyph came back 0x0 at every text size. The
+   answers are the sfnt's own — `head` for the em grid, `hhea` for the vertical metrics, both read with the
+   `FT_Load_Sfnt_Table`/`FT_Get_Sfnt_Table` doors this file already used for names — and the strike is SELECTED and
+   SCALED to the device size, bearings and advance included.
+
+The preference question was also measured and is recorded rather than implemented: making `CTFontCreateForString`
+PREFER a colour face that covers the character requires walking the whole registry (the family-name order puts DejaVu
+Sans — which has a monochrome smiley at U+1F600 — before Noto), and a walk that continues past the first covering
+candidate made the fallback slow enough that the AppKit's menu bar never appeared. A two-second delay in the same
+place reproduced it without any extra font, so the fault is the window ordering and not this library: the bar is
+ordered only while the application is active, and an application whose first frames are late enough never gets there.
+It is recorded in `libagora-text`'s README as an open defect, and the cascade's order is left alone until it is fixed.
+
+`README.md` records what is still not done.

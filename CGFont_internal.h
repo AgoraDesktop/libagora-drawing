@@ -94,7 +94,14 @@ CGGlyph cg_font_glyph_for_byte(CGFontRef font, unsigned char code, int macroman)
  * rather than reaching for a font engine of its own.
  *
  * IT IS AN INTERNAL DOOR, WHICH IS WHY ADDING IT DOES NOT REOPEN THE ERA QUESTION THIS LIBRARY ALREADY
- * SETTLED: what was struck is a DEPRECATED PUBLIC API, not the engine's ability to map a character. */
+ * SETTLED: what was struck is a DEPRECATED PUBLIC API, not the engine's ability to map a character.
+ *
+ * **AND A CHARACTER OUTSIDE THE BMP IS TWO UNITS AND ONE GLYPH.** The array is UTF-16, so an emoji arrives as a
+ * surrogate pair; the pair is combined here, occupies the HIGH surrogate's slot, leaves 0 in the low one, and
+ * counts as two mapped units — because the return value is how callers ask "did every character map", and a pair
+ * that mapped is not half-unmapped. Mapping the units separately, which is what this door used to do, asks the
+ * cmap for U+D83D: NO font has that, so every astral character in the tree was uncovered and nothing could fall
+ * back to the one font that has them. */
 int cg_font_glyphs_for_unichars(CGFontRef font, const uint16_t *characters, CGGlyph *glyphs, size_t count);
 
 /* A FONT BY NAME, FROM THE CONFIGURED FONT DIRECTORIES: the door Apple calls
@@ -163,6 +170,16 @@ int cg_font_is_registered(const char *path);
  * bitmap is `*width` SAMPLES wide — three to a pixel, in sub-pixel order — and `*left` is in PIXELS,
  * as it is with 1.
  *
+ * **AND `*samples` COMES BACK 4 FOR A COLOUR GLYPH, WHICH IS A PICTURE RATHER THAN A MASK.** The bytes are
+ * `*width * *height * 4` PREMULTIPLIED BGRA, blue first, with `*width` counted in PIXELS; the caller must not
+ * tint it and must not treat it as coverage (see CGContext.c's colour composite). It is not a smoothing answer —
+ * a colour glyph is never sub-pixel antialiased — which is why `cg_font_has_colour` exists: the caller can ask the
+ * face before the render, which keeps a flag that cannot matter out of the glyph cache's key.
+ *
+ * A FACE WITH NO OUTLINES IS DRAWN FROM ITS STRIKE: the strike is selected, the picture is scaled from the
+ * strike's em to `pixel_size`, and `*left`, `*top` and `*advance` are scaled with it. At a size the strike
+ * happens to match, nothing is scaled and the numbers are the engine's own.
+ *
  * `*advance` IS IN DEVICE PIXELS AT THE SIZE GIVEN, and no caller places glyphs with it: the layout's advances are
  * Core Text's, taken from the font's own metrics and unhinted (see CGContext.h). It is answered for the doors that
  * ask the engine rather than kept in step with a pen.
@@ -178,6 +195,14 @@ enum {
 	CG_FONT_INK_DARK = 1,
 	CG_FONT_INK_LIGHT = 2
 };
+
+/* **DOES THIS FACE HAVE COLOUR GLYPHS?** `FT_HAS_COLOR`, answered here so a caller decides *before* rendering
+ * rather than from the sample count afterward: the two things a caller does differently are (a) ask for grey
+ * rather than sub-pixel coverage and (b) paint the result instead of blending a mask, and only the first one has to
+ * be known in advance — it is part of the glyph cache's key, so learning it from the render would key one picture
+ * twice. A face can mix colour and ordinary glyphs; the flag is the face's, and the per-glyph answer is `*samples`
+ * coming back 4. */
+int cg_font_has_colour(CGFontRef font);
 
 int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size,
                          CGAffineTransform matrix, CGPoint delta, int smoothing, int ink,

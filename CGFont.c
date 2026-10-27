@@ -82,6 +82,12 @@ struct CGFont {
 	 * different questions and only the first one can be answered from the values. */
 	unsigned long advance_loads;	/* glyphs this font actually asked the engine about */
 	unsigned long advance_hits;	/* glyph answers taken from the array instead */
+
+	/* **THE EM GRID FOR A FACE THE ENGINE WILL NOT NAME ONE FOR** — see `fn_sfnt_upem`: a bitmap-only face has
+	 * `units_per_EM == 0`, and the sfnt `head` table is where the grid still is. Read once, because every metric
+	 * conversion divides by it. */
+	int em_units;
+	int em_known;
 };
 
 static FT_Library fn_library_handle;
@@ -423,12 +429,87 @@ size_t CGFontGetNumberOfGlyphs(CGFontRef font)
 	return (size_t)font->face->num_glyphs;
 }
 
+/* **THE EM GRID AND THE VERTICAL METRICS OF A BITMAP-ONLY FACE, WHICH FREETYPE REPORTS AS ZERO.** A face with no
+ * outlines (`FT_IS_SCALABLE` false — Noto Color Emoji is the one on this machine) has `units_per_EM == 0` and
+ * `ascender`/`descender`/`height` all zero, because FreeType's copies of those live in the scalable path. THE SFNT
+ * FILE STILL HAS THEM, and the em grid is the one number every division in the text stack asks for: `CTFont`'s
+ * metrics are `face number * size / upem`, so a zero upem silently made every metric of an emoji run zero or
+ * infinite, and `CTShaperCreate` REFUSED such a face outright ("a face with no sensible units per em is not one to
+ * shape with"), which is why no emoji could be laid out at all.
+ *
+ * SO THE `head` TABLE ANSWERS INSTEAD, read through the same sfnt door the name tables use. Noto Color Emoji says
+ * 2048, and its `hhea` says 1900/-500 — numbers a scalable face would have reported from the start. A face with
+ * neither answers 0, which is the honest answer and the one every caller already handles. */
+static int fn_sfnt_upem(FT_Face face)
+{
+	FT_Byte head[20];
+	FT_ULong length = sizeof head;
+
+	if (FT_Load_Sfnt_Table(face, FT_MAKE_TAG('h', 'e', 'a', 'd'), 0, head, &length) != 0
+	    || length < 20) {
+		return 0;
+	}
+	return ((int)head[18] << 8) | (int)head[19];
+}
+
+/* THE HORIZONTAL HEADER, for the same reason: it is where a face's ascent, descent and line gap live when the face
+ * itself reports none. A scalable face reports them through FreeType and never reaches here. */
+static TT_HoriHeader *fn_sfnt_hhea(FT_Face face)
+{
+	return (TT_HoriHeader *)FT_Get_Sfnt_Table(face, ft_sfnt_hhea);
+}
+
+/* THE FACE'S OWN NUMBERS, OR THE TABLE'S WHEN THE FACE HAS NONE. One place for "this is a bitmap-only face", because
+ * three doors below ask it and a second rule for it would be a second answer. */
+static int fn_face_ascender(FT_Face face)
+{
+	TT_HoriHeader *hhea;
+
+	if (face->ascender != 0 || face->descender != 0) {
+		return (int)face->ascender;
+	}
+	hhea = fn_sfnt_hhea(face);
+	return (hhea != NULL) ? (int)hhea->Ascender : 0;
+}
+
+static int fn_face_descender(FT_Face face)
+{
+	TT_HoriHeader *hhea;
+
+	if (face->ascender != 0 || face->descender != 0) {
+		return (int)face->descender;
+	}
+	hhea = fn_sfnt_hhea(face);
+	return (hhea != NULL) ? (int)hhea->Descender : 0;
+}
+
+static int fn_face_height(FT_Face face)
+{
+	TT_HoriHeader *hhea;
+
+	if (face->height != 0) {
+		return (int)face->height;
+	}
+	hhea = fn_sfnt_hhea(face);
+	/* THE SAME ARITHMETIC FreeType uses for a scalable face: ascent, descent and the gap between lines. */
+	return (hhea != NULL) ? (int)hhea->Ascender - (int)hhea->Descender + (int)hhea->Line_Gap : 0;
+}
+
 int CGFontGetUnitsPerEm(CGFontRef font)
 {
 	if (font == NULL || font->face == NULL) {
 		return 0;
 	}
-	return (int)font->face->units_per_EM;
+	if (font->face->units_per_EM > 0) {
+		return (int)font->face->units_per_EM;
+	}
+	/* READ ONCE: this is asked by every metric conversion (`CTFont`'s scale is `size / upem`), and reading a
+	 * table per question would be a file read behind a layout. */
+	if (!font->em_known) {
+		font->em_known = 1;
+		font->em_units = fn_sfnt_upem(font->face);
+	}
+	return font->em_units;
 }
 
 /* THE FOUR VERTICAL METRICS COME FROM THE FACE'S OWN HEAD/HHEA NUMBERS, in font units, which is
@@ -456,12 +537,12 @@ int CGFontGetUnitsPerEm(CGFontRef font)
  *     what a line height is supposed to be. */
 int CGFontGetAscent(CGFontRef font)
 {
-	return (font == NULL || font->face == NULL) ? 0 : (int)font->face->ascender;
+	return (font == NULL || font->face == NULL) ? 0 : fn_face_ascender(font->face);
 }
 
 int CGFontGetDescent(CGFontRef font)
 {
-	return (font == NULL || font->face == NULL) ? 0 : -(int)font->face->descender;
+	return (font == NULL || font->face == NULL) ? 0 : -fn_face_descender(font->face);
 }
 
 int CGFontGetLeading(CGFontRef font)
@@ -472,8 +553,8 @@ int CGFontGetLeading(CGFontRef font)
 	if (font == NULL || font->face == NULL) {
 		return 0;
 	}
-	lineHeight = (int)font->face->height;
-	glyphs = (int)font->face->ascender - (int)font->face->descender;
+	lineHeight = fn_face_height(font->face);
+	glyphs = fn_face_ascender(font->face) - fn_face_descender(font->face);
 	/* A FONT WHOSE TABLE DISAGREES WITH ITSELF — a height SHORTER than ascent + descent — answers zero
 	 * rather than a negative gap, because a negative leading would pull the next line UP through this
 	 * one. FreeType's own `height` is normally the larger of the two, so this is a guard against a
@@ -1118,9 +1199,34 @@ int cg_font_glyphs_for_unichars(CGFontRef font, const uint16_t *characters, CGGl
 	if (font == NULL || font->face == NULL || characters == NULL || glyphs == NULL) {
 		return 0;
 	}
+	/* **A CHARACTER OUTSIDE THE BMP IS TWO UNITS AND ONE GLYPH.** The array is UTF-16, so an emoji or a CJK
+	 * extension character arrives as a SURROGATE PAIR, and mapping the units one at a time asks the cmap for
+	 * U+D83D — which no font has — for the first half and U+DE00 for the second. MEASURED: Noto Color Emoji
+	 * answered "no glyph" for the only characters it is installed for, so the cascade never chose it and
+	 * `CTFontCreateForString` returned NULL for every emoji in this tree.
+	 *
+	 * THE PAIR OCCUPIES THE HIGH SURROGATE'S SLOT AND LEAVES 0 IN THE LOW ONE, and it counts as TWO mapped
+	 * units, because the return value is the callers' test for "every character mapped" and a pair that mapped
+	 * is not half-unmapped. That is the shape Apple's arrays have: one glyph per character, and a character
+	 * that needed two units still occupies the slot it started in. A LONE SURROGATE maps nothing — it is not a
+	 * character, and a font that claims it would be lying. */
 	for (i = 0; i < count; i++) {
-		FT_UInt index = FT_Get_Char_Index(font->face, (FT_ULong)characters[i]);
+		FT_ULong code = (FT_ULong)characters[i];
+		FT_UInt index;
 
+		if (code >= 0xD800u && code <= 0xDBFFu && i + 1 < count
+		    && characters[i + 1] >= 0xDC00u && characters[i + 1] <= 0xDFFFu) {
+			code = 0x10000u + ((code - 0xD800u) << 10) + ((FT_ULong)characters[i + 1] - 0xDC00u);
+			index = FT_Get_Char_Index(font->face, code);
+			glyphs[i] = (CGGlyph)index;
+			glyphs[i + 1] = 0;
+			if (index != 0) {
+				mapped += 2;
+			}
+			i++;
+			continue;
+		}
+		index = FT_Get_Char_Index(font->face, code);
 		glyphs[i] = (CGGlyph)index;
 		if (index != 0) {
 			mapped++;
@@ -1440,6 +1546,223 @@ static void fn_lcd_filter_use(double ppem)
 	(void)FT_Library_SetLcdFilter(fn_library_handle, (FT_LcdFilter)want);
 }
 
+/* ============================================================================================
+ * COLOUR, AND THE STRIKE A BITMAP FONT HAS INSTEAD OF OUTLINES
+ *
+ * **A COLOUR GLYPH ARRIVES AS A PICTURE, NOT AS COVERAGE.** FreeType returns it in `FT_PIXEL_MODE_BGRA`: four
+ * channels, blue first, PREMULTIPLIED by alpha, one byte each, and `bitmap.width` is a count of PIXELS (where an
+ * LCD bitmap's width is three samples per pixel). This file used to accept only grey and LCD coverage and printed
+ * a refusal for anything else, which is why Agora could not draw an emoji: every colour font in the world hands
+ * back exactly this.
+ *
+ * **AND THE ONLY COLOUR FONT ON A LINUX DESKTOP IS A BITMAP STRIKE, WHICH IS A THIRD PROBLEM.** Noto Color Emoji
+ * has no outlines at all (`FT_IS_SCALABLE` false): one embedded strike at 109 ppem, 136x128 pixels for an emoji,
+ * `units_per_EM == 0` in FreeType. `FT_Set_Char_Size` to a text size selects no strike and the glyph comes back
+ * 0x0, so a renderer that merely ACCEPTED BGRA would still have drawn nothing at 13 points. The strike is
+ * therefore SELECTED (`FT_Select_Size`) and the picture SCALED to the size the caller asked for — box-averaged
+ * when it shrinks, which a 109-ppem strike at a 13-point size always does, and interpolated when it grows. The
+ * left bearing, the top bearing and the advance are scaled with it, so the picture lands in the cell the layout
+ * reserved for it.
+ *
+ * WHAT IS NOT DONE, AND SAYS SO. A turned or sheared colour glyph falls back to the outline path (the strike is a
+ * picture at one size and ignores `FT_Set_Transform`); for an outline-less face that means a refusal and nothing
+ * drawn, which is the honest answer rather than a picture at the wrong angle. Sub-pixel coverage is not asked of
+ * a face with colour glyphs — a picture has no sub-pixel columns — and `cg_font_has_colour` tells the caller so,
+ * which is how the glyph cache never grows a second entry per glyph for a smoothing flag that cannot matter.
+ * ========================================================================================== */
+
+int cg_font_has_colour(CGFontRef font)
+{
+	return (font != NULL && font->face != NULL && FT_HAS_COLOR(font->face)) ? 1 : 0;
+}
+
+/* THE STRIKE WITH THE MOST PIXELS PER EM, which is the one to scale FROM: a strike smaller than the requested
+ * size can only be enlarged, and the largest is the most picture there is. A face with one strike — the emoji
+ * font's shape — has nothing to choose. */
+static int fn_strike_best(FT_Face face)
+{
+	int best = 0;
+	int i;
+
+	for (i = 1; i < face->num_fixed_sizes; i++) {
+		if (face->available_sizes[i].y_ppem > face->available_sizes[best].y_ppem) {
+			best = i;
+		}
+	}
+	return best;
+}
+
+/* ONE GRAY PLANE, SCALED. Box-averaged when it shrinks (every source pixel contributes to exactly one destination
+ * pixel, which is what keeps a thin stroke from disappearing), bilinear when it grows. */
+static unsigned char *fn_scale_gray(const unsigned char *src, int sw, int sh, int spitch, int dw, int dh)
+{
+	unsigned char *dst = (unsigned char *)malloc((size_t)dw * (size_t)dh);
+	int x, y;
+
+	if (dst == NULL) {
+		return NULL;
+	}
+	if (dw >= sw && dh >= sh) {
+		for (y = 0; y < dh; y++) {
+			double sy = ((double)y + 0.5) * (double)sh / (double)dh - 0.5;
+			int y0 = (int)floor(sy);
+			int y1 = y0 + 1;
+			double ty;
+
+			if (y0 < 0) y0 = 0;
+			if (y0 > sh - 1) y0 = sh - 1;
+			if (y1 > sh - 1) y1 = sh - 1;
+			ty = (sy < 0.0) ? 0.0 : (sy - (double)y0);
+			if (ty > 1.0) ty = 1.0;
+			for (x = 0; x < dw; x++) {
+				double sx = ((double)x + 0.5) * (double)sw / (double)dw - 0.5;
+				int x0 = (int)floor(sx);
+				int x1 = x0 + 1;
+				double tx;
+				double v;
+
+				if (x0 < 0) x0 = 0;
+				if (x0 > sw - 1) x0 = sw - 1;
+				if (x1 > sw - 1) x1 = sw - 1;
+				tx = (sx < 0.0) ? 0.0 : (sx - (double)x0);
+				if (tx > 1.0) tx = 1.0;
+				v = (1.0 - tx) * (1.0 - ty) * (double)src[(size_t)y0 * spitch + x0]
+				    + tx * (1.0 - ty) * (double)src[(size_t)y0 * spitch + x1]
+				    + (1.0 - tx) * ty * (double)src[(size_t)y1 * spitch + x0]
+				    + tx * ty * (double)src[(size_t)y1 * spitch + x1];
+				dst[(size_t)y * dw + x] = (unsigned char)(v + 0.5);
+			}
+		}
+		return dst;
+	}
+	for (y = 0; y < dh; y++) {
+		int sy0 = (int)((double)y * (double)sh / (double)dh);
+		int sy1 = (int)((double)(y + 1) * (double)sh / (double)dh);
+		int yy;
+
+		if (sy1 <= sy0) sy1 = sy0 + 1;
+		if (sy1 > sh) sy1 = sh;
+		for (x = 0; x < dw; x++) {
+			int sx0 = (int)((double)x * (double)sw / (double)dw);
+			int sx1 = (int)((double)(x + 1) * (double)sw / (double)dw);
+			int sum = 0, count = 0, xx;
+
+			if (sx1 <= sx0) sx1 = sx0 + 1;
+			if (sx1 > sw) sx1 = sw;
+			for (yy = sy0; yy < sy1; yy++) {
+				for (xx = sx0; xx < sx1; xx++) {
+					sum += src[(size_t)yy * spitch + xx];
+					count++;
+				}
+			}
+			dst[(size_t)y * dw + x] = (unsigned char)((count > 0) ? (sum + count / 2) / count : 0);
+		}
+	}
+	return dst;
+}
+
+/* FOUR PREMULTIPLIED CHANNELS, SCALED — the same two filters, kept in the same order, so the inked picture and its
+ * alpha shrink together. Premultiplied values average and interpolate correctly as they are, which is the reason
+ * this file takes FreeType's premultiplied bitmap rather than dividing it by alpha first. */
+static unsigned char *fn_scale_bgra(const unsigned char *src, int sw, int sh, int spitch, int dw, int dh)
+{
+	unsigned char *dst = (unsigned char *)malloc((size_t)dw * (size_t)dh * 4u);
+	int x, y, c;
+
+	if (dst == NULL) {
+		return NULL;
+	}
+	if (dw >= sw && dh >= sh) {
+		for (y = 0; y < dh; y++) {
+			double sy = ((double)y + 0.5) * (double)sh / (double)dh - 0.5;
+			int y0 = (int)floor(sy);
+			int y1 = y0 + 1;
+			double ty;
+
+			if (y0 < 0) y0 = 0;
+			if (y0 > sh - 1) y0 = sh - 1;
+			if (y1 > sh - 1) y1 = sh - 1;
+			ty = (sy < 0.0) ? 0.0 : (sy - (double)y0);
+			if (ty > 1.0) ty = 1.0;
+			for (x = 0; x < dw; x++) {
+				double sx = ((double)x + 0.5) * (double)sw / (double)dw - 0.5;
+				int x0 = (int)floor(sx);
+				int x1 = x0 + 1;
+				double tx;
+
+				if (x0 < 0) x0 = 0;
+				if (x0 > sw - 1) x0 = sw - 1;
+				if (x1 > sw - 1) x1 = sw - 1;
+				tx = (sx < 0.0) ? 0.0 : (sx - (double)x0);
+				if (tx > 1.0) tx = 1.0;
+				for (c = 0; c < 4; c++) {
+					double v = (1.0 - tx) * (1.0 - ty) * (double)src[(size_t)y0 * spitch + (size_t)x0 * 4u + c]
+						 + tx * (1.0 - ty) * (double)src[(size_t)y0 * spitch + (size_t)x1 * 4u + c]
+						 + (1.0 - tx) * ty * (double)src[(size_t)y1 * spitch + (size_t)x0 * 4u + c]
+						 + tx * ty * (double)src[(size_t)y1 * spitch + (size_t)x1 * 4u + c];
+
+					dst[((size_t)y * dw + x) * 4u + c] = (unsigned char)(v + 0.5);
+				}
+			}
+		}
+		return dst;
+	}
+	for (y = 0; y < dh; y++) {
+		int sy0 = (int)((double)y * (double)sh / (double)dh);
+		int sy1 = (int)((double)(y + 1) * (double)sh / (double)dh);
+		int yy;
+
+		if (sy1 <= sy0) sy1 = sy0 + 1;
+		if (sy1 > sh) sy1 = sh;
+		for (x = 0; x < dw; x++) {
+			int sx0 = (int)((double)x * (double)sw / (double)dw);
+			int sx1 = (int)((double)(x + 1) * (double)sw / (double)dw);
+			double sum[4] = { 0.0, 0.0, 0.0, 0.0 };
+			int count = 0, xx;
+
+			if (sx1 <= sx0) sx1 = sx0 + 1;
+			if (sx1 > sw) sx1 = sw;
+			for (yy = sy0; yy < sy1; yy++) {
+				for (xx = sx0; xx < sx1; xx++) {
+					const unsigned char *p = src + (size_t)yy * spitch + (size_t)xx * 4u;
+
+					sum[0] += p[0];
+					sum[1] += p[1];
+					sum[2] += p[2];
+					sum[3] += p[3];
+					count++;
+				}
+			}
+			for (c = 0; c < 4; c++) {
+				dst[((size_t)y * dw + x) * 4u + c] = (unsigned char)((count > 0)
+					? (sum[c] / (double)count + 0.5) : 0.0);
+			}
+		}
+	}
+	return dst;
+}
+
+/* ONE BIT PER PIXEL, EXPANDED TO A COVERAGE PLANE. Some bitmap faces are 1-bit (FreeType's `FT_PIXEL_MODE_MONO`),
+ * and the coverage warp and the mask path both want a byte per pixel; the high bit of each byte is the leftmost
+ * pixel, which is the convention sfnt bitmap strikes use: the high bit of each byte is the leftmost. */
+static unsigned char *fn_coverage_from_mono(const unsigned char *src, int w, int h, int pitch)
+{
+	unsigned char *dst = (unsigned char *)malloc((size_t)w * (size_t)h);
+	int x, y;
+
+	if (dst == NULL) {
+		return NULL;
+	}
+	for (y = 0; y < h; y++) {
+		const unsigned char *row = src + (size_t)y * pitch;
+
+		for (x = 0; x < w; x++) {
+			dst[(size_t)y * w + x] = ((row[x >> 3] >> (7 - (x & 7))) & 1) ? 255 : 0;
+		}
+	}
+	return dst;
+}
+
 int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size, CGAffineTransform matrix,
 			 CGPoint delta, int smoothing, int ink, unsigned char **coverage, int *width, int *height,
 			 int *left, int *top, double *advance, int *samples)
@@ -1452,6 +1775,13 @@ int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size, CGAf
 	unsigned char *buf;
 	int w, h, row, mirror = 0;
 	int per_pixel = 1;
+	/* **THE TWO CASES A FACE CAN PRESENT INSTEAD OF AN OUTLINE.** `bitmap_face` is set for a face with no
+	 * scalable outlines at all, whose glyphs are embedded strikes; `strike` is then the ratio between the strike's
+	 * own pixels and the device pixels the caller asked for, and every number the bitmap reports is multiplied by
+	 * it. 1.0 means "no strike, or a strike at exactly the size" — the same value, so the arithmetic below has no
+	 * second branch for "scalable". */
+	int bitmap_face = 0;
+	double strike = 1.0;
 	/* WHETHER THE TRANSFORM IS THE IDENTITY, which is the question a bitmap strike's absence depends on: an
 	 * embedded bitmap is a picture at one size and ignores `FT_Set_Transform` entirely, so a turned or sheared
 	 * glyph must not be allowed to come back as one. The test is on the MAGNITUDE because a window's context is
@@ -1466,9 +1796,28 @@ int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size, CGAf
 	if (pixel_size <= 0.0) {
 		return 0;
 	}
-	/* THE RESOLUTIONS ARE 72 DPI, WHICH IS THE 1:1 CASE — measured: passing 0 ("the default") is
-	 * REFUSED by the engine in this tree and every glyph came back as a silent nothing. */
-	if (FT_Set_Char_Size(font->face, 0, (FT_F26Dot6)(pixel_size * 64.0 + 0.5), 72, 72) != 0) {
+	/* **A FACE WITH NO OUTLINES HAS STRIKES INSTEAD OF SIZES, AND THE SIZE HAS TO BE STATED IN THE STRIKE'S OWN
+	 * TERMS.** `FT_Set_Char_Size` on such a face silently selects nothing — MEASURED: Noto Color Emoji at 13 px
+	 * answered a 0x0 bitmap, so the emoji was invisible at every text size — while `FT_Select_Size` gets the
+	 * embedded picture (136x128 at 109 ppem). What is left is a scale ratio, applied to the picture and to the
+	 * three numbers that place it. */
+	if (!FT_IS_SCALABLE(font->face)) {
+		int best = fn_strike_best(font->face);
+		double ppem;
+
+		if (font->face->num_fixed_sizes <= 0 || FT_Select_Size(font->face, best) != 0) {
+			fprintf(stderr, "CG-REFUSE: this face has no outlines and no usable strike to draw\n");
+			return 0;
+		}
+		ppem = (double)font->face->available_sizes[best].y_ppem / 64.0;
+		if (!(ppem > 0.0)) {
+			return 0;
+		}
+		strike = (double)pixel_size / ppem;
+		bitmap_face = 1;
+	} else if (FT_Set_Char_Size(font->face, 0, (FT_F26Dot6)(pixel_size * 64.0 + 0.5), 72, 72) != 0) {
+		/* THE RESOLUTIONS ARE 72 DPI, WHICH IS THE 1:1 CASE — measured: passing 0 ("the default") is
+		 * REFUSED by the engine in this tree and every glyph came back as a silent nothing. */
 		fprintf(stderr, "CG-REFUSE: the engine would not set the font size (%.2f)\n",
 			(double)pixel_size);
 		return 0;
@@ -1480,6 +1829,14 @@ int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size, CGAf
 	 * what Apple's own renderer does with turned text. The gate is on the transform the glyph is RASTERISED
 	 * with — the text matrix composed with the CTM, which is what `matrix` is here. */
 	if (smoothing && (matrix.b != 0.0 || matrix.c != 0.0)) {
+		smoothing = 0;
+	}
+	/* **AND A COLOUR GLYPH HAS NO SUB-PIXEL COLUMNS TO SMOOTH.** Its picture is four channels of colour, not three
+	 * coverages per pixel, so asking the engine for LCD coverage of it would at best be ignored and at worst
+	 * produce a refusal; the tier asks for grey and gets the picture. `cg_font_has_colour` answers the same
+	 * question for the caller, which is what keeps a smoothing flag that cannot matter out of the glyph cache's
+	 * key. */
+	if (smoothing && FT_HAS_COLOR(font->face)) {
 		smoothing = 0;
 	}
 	/* A REFLECTION IS TAKEN OUT OF THE ENGINE'S MATRIX AND PUT BACK INTO THE ROWS, because a bitmap
@@ -1529,6 +1886,14 @@ int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size, CGAf
 	if (!plain) {
 		flags |= FT_LOAD_NO_BITMAP;
 	}
+	/* **COLOUR IS ASKED FOR WHENEVER A BITMAP MAY BE USED AT ALL.** `FT_LOAD_COLOR` is a no-op for a glyph with no
+	 * colour (a normal glyph still comes back grey), so it is not conditioned on the face being one the caller
+	 * expects colour from: a face that mixes an emoji with ordinary letters has to render the letters too. It is
+	 * deliberately NOT set beside `FT_LOAD_NO_BITMAP` — a turned colour glyph has no outline to fall back to, and
+	 * the refusal that follows is the honest answer rather than a picture at the wrong angle. */
+	if (plain) {
+		flags |= FT_LOAD_COLOR;
+	}
 	if (smoothing) {
 		fn_lcd_filter_use((double)pixel_size);
 	}
@@ -1537,72 +1902,161 @@ int cg_font_render_glyph(CGFontRef font, CGGlyph glyph, CGFloat pixel_size, CGAf
 		return 0;
 	}
 	slot = font->face->glyph;
-	if (FT_Render_Glyph(slot, smoothing ? FT_RENDER_MODE_LCD : FT_RENDER_MODE_NORMAL) != 0) {
-		fprintf(stderr, "CG-REFUSE: the engine would not render glyph %u\n", (unsigned)glyph);
-		return 0;
+	/* **A STRIKE IS ALREADY A PICTURE, SO THERE IS NOTHING TO RASTERISE.** `FT_Render_Glyph` on a bitmap slot copies
+	 * it, and for a BGRA slot it would first have to decide what to do with a colour bitmap it cannot render from
+	 * an outline — so the call is skipped when the load produced a bitmap, which is the normal case for a strike. */
+	if (slot->format != FT_GLYPH_FORMAT_BITMAP) {
+		if (FT_Render_Glyph(slot, smoothing ? FT_RENDER_MODE_LCD : FT_RENDER_MODE_NORMAL) != 0) {
+			fprintf(stderr, "CG-REFUSE: the engine would not render glyph %u\n", (unsigned)glyph);
+			return 0;
+		}
 	}
-	/* TWO COVERAGE FORMATS COME BACK AND BOTH ARE UNDERSTOOD: one sample per pixel, and — when smoothing was
-	 * asked for — three, one per sub-pixel column. Anything else is a face this library cannot place. */
-	if (slot->bitmap.pixel_mode == FT_PIXEL_MODE_LCD) {
-		per_pixel = 3;
-	} else if (slot->bitmap.pixel_mode != FT_PIXEL_MODE_GRAY) {
+	/* **FOUR FORMATS COME BACK, AND EACH ONE IS A DIFFERENT KIND OF PICTURE.** Grey coverage is one sample per
+	 * pixel; LCD coverage is three, one per sub-pixel column; a colour glyph is four PREMULTIPLIED channels, blue
+	 * first; and a 1-bit strike is one bit per pixel, which is coverage too and is expanded below. `per_pixel` is
+	 * what the caller is told, and 4 is the value that means "a picture, not a mask". */
+	switch (slot->bitmap.pixel_mode) {
+	case FT_PIXEL_MODE_BGRA:
+		per_pixel = 4;		/* colour: `bitmap.width` is PIXELS */
+		break;
+	case FT_PIXEL_MODE_LCD:
+		per_pixel = 3;		/* sub-pixel coverage: `bitmap.width` is SAMPLES */
+		break;
+	case FT_PIXEL_MODE_GRAY:
+	case FT_PIXEL_MODE_MONO:
+		per_pixel = 1;		/* coverage, expanded below when it is one bit per pixel */
+		break;
+	default:
 		fprintf(stderr, "CG-REFUSE: this font renders glyph coverage this library cannot use "
 				"(pixel mode %d)\n", slot->bitmap.pixel_mode);
 		return 0;
 	}
 	w = (int)slot->bitmap.width;
 	h = (int)slot->bitmap.rows;
-	buf = malloc((size_t)(w > 0 && h > 0 ? w * h : 1));
-	if (buf == NULL) {
-		return 0;
-	}
 	/* THE ROWS ARE **NOT** REVERSED WHEN THE FLIP WAS TAKEN OUT OF THE MATRIX, which is a correction
 	 * the PICTURE made and no check in the probe did. FreeType's bitmap rows are TOP-DOWN whatever
 	 * direction its outline ran, so after the un-flip they are ALREADY in the device's own order
 	 * (y down) — reversing them beat the glyph twice and every letter came out vertically mirrored.
 	 * The probe's `L` check passed on that upside-down picture, because a mirrored `L` still has its
 	 * STEM crossing the baseline, which is all that check measured; it now compares two bands. */
-	/* **AND THE COVERAGE IS WARPED WHILE IT IS COPIED, WHICH IS THE ONE PASS OVER IT THAT ALREADY EXISTS.**
-	 * See `cg_font_coverage_warp` for what the curve is for; what is here is that the table is looked up once per
-	 * glyph rather than once per sample, and that a 16-px-and-up glyph gets NULL and takes the plain copy. The
-	 * warp is applied to the SAMPLES, so a smoothed glyph's three sub-pixel columns each get the same curve —
-	 * which is the same thing every renderer that does this does, because the three samples of a pixel are three
-	 * coverages and coverage is what the curve is a function of. */
-	warp = fn_warp_lut((double)pixel_size, ink);
-	for (row = 0; row < h; row++) {
-		const unsigned char *src = slot->bitmap.buffer + (size_t)row * (size_t)(slot->bitmap.pitch < 0
-										      ? -slot->bitmap.pitch
-										      : slot->bitmap.pitch);
-		unsigned char *dst = buf + (size_t)row * (size_t)w;
-		int col;
+	buf = NULL;
+	if (w > 0 && h > 0) {
+		int out_w = w;
+		int out_h = h;
+		int scaling = (bitmap_face && (strike < 0.999 || strike > 1.001));
+		int pitch = slot->bitmap.pitch < 0 ? -slot->bitmap.pitch : slot->bitmap.pitch;
 
-		if (warp == NULL) {
-			memcpy(dst, src, (size_t)w);
-			continue;
+		if (scaling) {
+			out_w = (int)floor((double)w * strike + 0.5);
+			out_h = (int)floor((double)h * strike + 0.5);
+			if (out_w < 1) out_w = 1;
+			if (out_h < 1) out_h = 1;
 		}
-		for (col = 0; col < w; col++) {
-			dst[col] = warp[src[col]];
+		if (per_pixel == 4) {
+			/* COLOUR: premultiplied BGRA, copied at the stride the engine used or scaled to the device grid. */
+			if (scaling) {
+				buf = fn_scale_bgra(slot->bitmap.buffer, w, h, pitch, out_w, out_h);
+			} else {
+				buf = (unsigned char *)malloc((size_t)w * (size_t)h * 4u);
+				if (buf != NULL) {
+					for (row = 0; row < h; row++) {
+						memcpy(buf + (size_t)row * (size_t)w * 4u,
+						       slot->bitmap.buffer + (size_t)row * (size_t)pitch,
+						       (size_t)w * 4u);
+					}
+				}
+			}
+		} else if (per_pixel == 3) {
+			/* SUB-PIXEL COVERAGE, never scaled: a strike has no sub-pixel columns, so this only ever comes from
+			 * an outline rasterised at the requested size. */
+			out_w = w;
+			out_h = h;
+			buf = (unsigned char *)malloc((size_t)w * (size_t)h);
+			if (buf != NULL) {
+				for (row = 0; row < h; row++) {
+					memcpy(buf + (size_t)row * (size_t)w,
+					       slot->bitmap.buffer + (size_t)row * (size_t)pitch, (size_t)w);
+				}
+			}
+		} else {
+			/* GREY OR 1-BIT COVERAGE: one plane, expanded if it is mono, then scaled. */
+			const unsigned char *plane = slot->bitmap.buffer;
+			unsigned char *expanded = NULL;
+			int plane_pitch = pitch;
+
+			if (slot->bitmap.pixel_mode == FT_PIXEL_MODE_MONO) {
+				expanded = fn_coverage_from_mono(plane, w, h, pitch);
+				plane = expanded;
+				plane_pitch = w;
+			}
+			if (plane != NULL) {
+				if (scaling) {
+					buf = fn_scale_gray(plane, w, h, plane_pitch, out_w, out_h);
+				} else {
+					buf = (unsigned char *)malloc((size_t)w * (size_t)h);
+					if (buf != NULL) {
+						for (row = 0; row < h; row++) {
+							memcpy(buf + (size_t)row * (size_t)w,
+							       plane + (size_t)row * (size_t)plane_pitch, (size_t)w);
+						}
+					}
+				}
+			}
+			free(expanded);
 		}
+		w = out_w;
+		h = out_h;
+		/* **AND THE COVERAGE IS WARPED AFTER THE PICTURE IS THE CALLER'S SIZE, WHICH IS WHERE THE ONE PASS OVER IT
+		 * IS.** See `cg_font_coverage_warp` for what the curve is for; what is here is that the table is looked up
+		 * once per glyph rather than once per sample, that a 16-px-and-up glyph gets NULL and keeps its bytes, and
+		 * that the curve is applied to the FINAL device-size coverage — warping and then resampling would put a
+		 * curve meant for this size on samples from another one.
+		 *
+		 * IT APPLIES TO SUB-PIXEL COVERAGE TOO, and that is not a detail: the three samples of a pixel are three
+		 * coverages, so they take the same curve the grey path does, and a glyph's WEIGHT is the same number
+		 * whichever coverage was asked for. MEASURED: leaving the smoothed path out made 13-point text at 0.8 scale
+		 * weigh 0.948 of the same text on a whole-pixel desktop, which is outside the band the warp is calibrated
+		 * to and is why this is one block rather than two. */
+		if (buf != NULL && per_pixel != 4) {
+			warp = fn_warp_lut((double)pixel_size, ink);
+			if (warp != NULL) {
+				int i;
+
+				for (i = 0; i < w * h; i++) {
+					buf[i] = warp[buf[i]];
+				}
+			}
+		}
+	} else {
+		/* NO INK, WHICH IS NOT A FAILURE: a space advances and draws nothing, and .notdef's bitmap is empty. */
+		buf = (unsigned char *)malloc(1);
+	}
+	if (buf == NULL) {
+		return 0;
 	}
 	*coverage = buf;
 	/* **`*width` IS A COUNT OF SAMPLES AND NOT OF PIXELS**, and `*samples` says how many of them make a pixel.
 	 * `*left` IS IN WHOLE PIXELS FOR BOTH — MEASURED, and worth stating because the obvious guess is wrong: the
 	 * engine reports an LCD bitmap's bearing in pixels exactly as it does a grey one's, and the finer grid lives
 	 * entirely in the samples' own values. A caller that divided it by three would place every smoothed glyph in
-	 * a different sub-column for every pen phase. */
+	 * a different sub-column for every pen phase. A COLOUR GLYPH IS THE THIRD CASE: `*width` is PIXELS and
+	 * `*samples` is 4, which is how the caller knows the bytes are a picture rather than a mask. */
 	*width = w;
 	*height = h;
 	if (samples != NULL) {
-		*samples = per_pixel;
+		*samples = (w > 0 && h > 0) ? per_pixel : 1;
 	}
+	/* THE BEARINGS AND THE ADVANCE MOVE WITH THE PICTURE when a strike was scaled, because every one of them was
+	 * measured in the strike's grid. At `strike == 1` the arithmetic is the identity, so a scalable face keeps
+	 * the exact integers the engine reported. */
 	if (left != NULL) {
-		*left = slot->bitmap_left;
+		*left = (int)floor((double)slot->bitmap_left * strike + 0.5);
 	}
 	if (top != NULL) {
-		*top = slot->bitmap_top;
+		*top = (int)floor((double)slot->bitmap_top * strike + 0.5);
 	}
 	if (advance != NULL) {
-		*advance = slot->advance.x / 64.0;
+		*advance = slot->advance.x / 64.0 * strike;
 	}
 	(void)mirror;
 	return 1;
@@ -1961,7 +2415,10 @@ int cg_font_render_glyph_cached(CGFontRef font, CGGlyph glyph, CGFloat pixel_siz
 	entry->samples = s;
 	entry->advance = adv;
 	entry->coverage = fresh;
-	entry->bytes = sizeof(*entry) + (size_t)((w > 0 && h > 0) ? w * h : 1);
+	/* THE BUDGET IS THE PICTURE AND NOT THE PIXEL COUNT: a colour glyph is four bytes a pixel and an LCD one
+	 * three, and charging them as one byte each would let this cache hold four times the memory it says it does. */
+	entry->bytes = sizeof(*entry)
+		       + (size_t)((w > 0 && h > 0) ? (size_t)w * (size_t)h * (size_t)(s > 0 ? s : 1) : 1);
 
 	fn_glyph_admit(entry, bucket);
 

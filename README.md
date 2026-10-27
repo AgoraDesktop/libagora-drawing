@@ -119,6 +119,58 @@ painter report how many glyphs one batch carries, which is the number that says 
 What remains is the composite itself, the hand blend's shape, and the full-window damage the seam still asks for (see
 "What is not done").
 
+## Colour glyphs, and the strike a face has instead of outlines
+
+**A COLOUR GLYPH IS A PICTURE, NOT A MASK, AND THE ENGINE HANDS IT OVER AS FOUR PREMULTIPLIED CHANNELS.** FreeType
+returns it in `FT_PIXEL_MODE_BGRA` — blue first, one byte each, the colour channels already multiplied by alpha —
+and this library used to accept only grey and sub-pixel coverage, printing a refusal for anything else. Every colour
+font in the world answers in exactly that format, so the refusal was the whole of "Agora cannot draw an emoji".
+
+- **`*samples` IS 4 FOR A COLOUR GLYPH**, where 3 is sub-pixel coverage and 1 is grey. `*width` is counted in PIXELS
+  (an LCD bitmap's width is three samples per pixel) and the bytes are `width * height * 4`. `cg_font_has_colour` is
+  the same question asked of the FACE before a render, which is what keeps a smoothing flag that cannot matter out of
+  the glyph cache's key: a picture has no sub-pixel columns, so a face with colour glyphs is asked for grey.
+- **THE PAINT IS ITS OWN COMPOSITE** (`cg_composite_glyph_colour`): the source's components go down as they are and
+  the destination is attenuated by the source's alpha and by the context's GLOBAL alpha. The caller's FILL COLOUR is
+  ignored — a colour glyph has no ink colour to choose — and the clip and clip mask are the same two tests the
+  smoothed path makes. A batch cannot carry one: a run is one a8 mask painted in one colour, so a colour glyph
+  FLUSHES the pending strip first and is painted on its own, in order.
+- **AN OPERATOR THAT CANNOT TAKE PREMULTIPLIED COLOUR FALLS BACK TO THE ALPHA.** `plusDarker` and the rest are hand
+  loops over one source colour, so a picture under them is painted as its ALPHA as coverage in the caller's ink —
+  the shape in the right place, in the right colour, without the picture's own. That is stated rather than silently
+  dropping ink.
+- **THE ONLY COLOUR FONT A LINUX DESKTOP HAS IS A BITMAP STRIKE, WHICH IS A SECOND PROBLEM.** Noto Color Emoji has no
+  outlines: one embedded strike at 109 ppem, 136x128 pixels for an emoji, and `units_per_EM == 0` in FreeType, because
+  the engine keeps the scalable path's copy of that number. `FT_Set_Char_Size` to a text size selects NO strike and
+  the glyph comes back 0x0 — so a renderer that merely ACCEPTED BGRA would still have drawn nothing at 13 points.
+  The strike is therefore SELECTED (`FT_Select_Size`, the largest) and the picture SCALED to the device size the
+  caller asked for: box-averaged when it shrinks, interpolated when it grows, premultiplied so the channels average
+  correctly. The left bearing, the top bearing and the advance are scaled with it, so the picture lands in the cell
+  the layout reserved.
+- **AND THE FACE'S METRICS COME FROM THE SFNT, WHICH IS WHERE THEY STILL ARE.** A bitmap face reports
+  `units_per_EM`, `ascender`, `descender` and `height` as ZERO, and the text tier divides by the first of those for
+  every metric it has — so an emoji run measured zero and `CTShaperCreate` refused the face outright. `head` still
+  says 2048 and `hhea` still says 1900/-500, so those are read through the same sfnt door the name tables use.
+  MEASURED: Noto Color Emoji answers `upem=2048 ascent=1900 descent=500`, and its advance for U+1F600 is 2550 units —
+  16.19 points at 13, which is the emoji's own width.
+- **THE GLYPH CACHE CHARGES A COLOUR PICTURE FOUR BYTES A PIXEL.** An entry accounted at one byte a pixel would let
+  the cache hold four times the memory it reports; the same change makes an LCD entry's bill honest too.
+- **WHAT IS NOT DONE.** A TURNED OR SHEARED colour glyph falls back to the outline path (a strike is a picture at one
+  size and ignores the transform), which for an outline-less face draws NOTHING rather than a picture at the wrong
+  angle. **COLR v1 and SVG colour descriptions are not handled** — a COLR v0 font renders as far as FreeType paints
+  its layers, and an SVG-in-OpenType face draws its fallback outlines (Noto Color Emoji as installed here is CBDT and
+  is the case measured). And **WHICH FACE the text tier picks for an emoji is not this library's decision**: the
+  cascade's order is by family name, and on this host the first face that covers U+1F600 is a monochrome outline face,
+  so an emoji set through `CTLine` is drawn in that face's own ink. See `libagora-text`'s README for the preference
+  that was implemented, measured and withdrawn.
+
+MEASURED (`tests/colour_glyphs.c`, the host's Noto Color Emoji): `upem=2048 ascent=1900 descent=500`, U+1F600 maps to
+one glyph with 0 in the low surrogate's slot, a 13-pixel rendering is **16x15** premultiplied pixels (168 opaque, all
+168 coloured, none over alpha) where the strike is 136x128, four times the size is four times the picture and the
+advance (65x61, `advance 16.22 -> 64.9`), the cache answers the same bytes on the second ask and bills them at four
+bytes a pixel, and a bitmap context painted with a BLACK fill receives **548 inked pixels, 513 of them coloured**. The
+end-to-end case in this tree is `a😀b` through `CTLineDraw`: the coloured run is 821 of 1287 inked pixels.
+
 ## Status
 
 **AND A PDF READER IS HERE: THE DOCUMENT, THE PAGE TREE, THE OBJECTS AND THE CONTENT STREAM.** It is the G2 reader
