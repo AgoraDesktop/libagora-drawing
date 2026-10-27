@@ -155,21 +155,23 @@ font in the world answers in exactly that format, so the refusal was the whole o
   16.19 points at 13, which is the emoji's own width.
 - **THE GLYPH CACHE CHARGES A COLOUR PICTURE FOUR BYTES A PIXEL.** An entry accounted at one byte a pixel would let
   the cache hold four times the memory it reports; the same change makes an LCD entry's bill honest too.
+- **WHICH FACE the text tier picks for an emoji is Core Text's decision, and it is made**: the cascade prefers a face
+  that draws the character in colour, ahead of the registry's family-name order, at a cost paid once (17.9 ms for the
+  search, 1 µs thereafter). `a😀b` in a monospaced face is three runs with the middle one in Noto Color Emoji. See
+  `libagora-text`'s README for the design and the two slower shapes that were measured first.
 - **WHAT IS NOT DONE.** A TURNED OR SHEARED colour glyph falls back to the outline path (a strike is a picture at one
   size and ignores the transform), which for an outline-less face draws NOTHING rather than a picture at the wrong
   angle. **COLR v1 and SVG colour descriptions are not handled** — a COLR v0 font renders as far as FreeType paints
   its layers, and an SVG-in-OpenType face draws its fallback outlines (Noto Color Emoji as installed here is CBDT and
-  is the case measured). And **WHICH FACE the text tier picks for an emoji is not this library's decision**: the
-  cascade's order is by family name, and on this host the first face that covers U+1F600 is a monochrome outline face,
-  so an emoji set through `CTLine` is drawn in that face's own ink. See `libagora-text`'s README for the preference
-  that was implemented, measured and withdrawn.
+  is the case measured).
 
 MEASURED (`tests/colour_glyphs.c`, the host's Noto Color Emoji): `upem=2048 ascent=1900 descent=500`, U+1F600 maps to
 one glyph with 0 in the low surrogate's slot, a 13-pixel rendering is **16x15** premultiplied pixels (168 opaque, all
 168 coloured, none over alpha) where the strike is 136x128, four times the size is four times the picture and the
 advance (65x61, `advance 16.22 -> 64.9`), the cache answers the same bytes on the second ask and bills them at four
 bytes a pixel, and a bitmap context painted with a BLACK fill receives **548 inked pixels, 513 of them coloured**. The
-end-to-end case in this tree is `a😀b` through `CTLineDraw`: the coloured run is 821 of 1287 inked pixels.
+end-to-end case is `a😀b` through `CTLineDraw` at 32 points: **821 coloured of 1287 inked pixels**, the emoji's own
+yellow at the pen and the two letters in the black fill.
 
 ## Status
 

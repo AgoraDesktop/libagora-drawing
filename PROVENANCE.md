@@ -132,12 +132,13 @@ an emoji could be drawn, and the third one is why the first two were not enough:
    `FT_Load_Sfnt_Table`/`FT_Get_Sfnt_Table` doors this file already used for names — and the strike is SELECTED and
    SCALED to the device size, bearings and advance included.
 
-The preference question was also measured and is recorded rather than implemented: making `CTFontCreateForString`
-PREFER a colour face that covers the character requires walking the whole registry (the family-name order puts DejaVu
-Sans — which has a monochrome smiley at U+1F600 — before Noto), and a walk that continues past the first covering
-candidate made the fallback slow enough that the AppKit's menu bar never appeared. A two-second delay in the same
-place reproduced it without any extra font, so the fault is the window ordering and not this library: the bar is
-ordered only while the application is active, and an application whose first frames are late enough never gets there.
-It is recorded in `libagora-text`'s README as an open defect, and the cascade's order is left alone until it is fixed.
+The preference question was measured too, and it belongs to `libagora-text` rather than to this library: the
+family-name order puts DejaVu Sans — which has a monochrome outline smiley at U+1F600 — before Noto, so a fallback for
+an emoji reached a face that would paint it in the caller's ink. The first attempt paid for the walk inside the shared
+font search, which the AppKit uses for the UI font as well, and that made the application's first frames seconds late;
+the second paid **6.0 s** on the first fallback by asking the registry for each candidate's name; the third reads
+PATHS, keeps the open face, and costs **17.9 ms once and 1 µs thereafter**. What this library holds is the picture and
+the paint; which face supplies it is Core Text's decision, and it now prefers colour. `libagora-text`'s README has the
+numbers.
 
 `README.md` records what is still not done.
