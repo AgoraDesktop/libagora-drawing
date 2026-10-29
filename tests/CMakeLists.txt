@@ -128,3 +128,14 @@ target_link_libraries(flatten_memory PRIVATE Drawing CoreFoundation::CoreFoundat
 add_test(NAME flatten-memory COMMAND flatten_memory)
 set_tests_properties(flatten-memory PROPERTIES SKIP_RETURN_CODE 77 ENVIRONMENT
   "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")
+
+# **THE UMBRELLA, MEASURED: THAT IT COMPILES FROM C, AND THAT IT NAMES EVERY INSTALLED HEADER.** The component
+# installs `*.h` with a glob, so a header joins the public surface the moment its file exists — an umbrella that
+# stopped naming them would be a directory listing pretending to be an interface. Written in C because Core Graphics
+# is a C API: a `.c` file that includes the umbrella has to compile.
+add_executable(umbrella umbrella.c)
+target_link_libraries(umbrella PRIVATE Drawing CoreFoundation::CoreFoundation)
+target_compile_definitions(umbrella PRIVATE
+  COREGRAPHICS_UMBRELLA="${CMAKE_CURRENT_SOURCE_DIR}/../CoreGraphics.h"
+  COREGRAPHICS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/..")
+add_test(NAME coregraphics_umbrella COMMAND umbrella)
