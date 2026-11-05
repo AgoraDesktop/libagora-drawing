@@ -16,7 +16,7 @@
 
 cmake_minimum_required(VERSION 3.24)
 
-project(AgoraDrawing LANGUAGES C)
+project(AgoraDrawing LANGUAGES C CXX)
 
 # **EVERY LIBRARY FINDS ITS NEIGHBOURS, AND THE INSTALLED BUNDLE NEEDS NO ENVIRONMENT.** A `DT_RUNPATH` is NOT
 # inherited by a dependency's own dependencies: whatever a program puts on its search path covers the libraries IT
@@ -82,7 +82,11 @@ file(CREATE_LINK "${CMAKE_CURRENT_SOURCE_DIR}" "${_agora_include_dir}/CoreGraphi
 # ---------------------------------------------------------------------------
 # The library: every .c in the directory
 # ---------------------------------------------------------------------------
-file(GLOB DRAWING_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.c")
+# **TWO OF THE DECODERS ARE C++, AND THAT IS THE ONLY C++ IN THIS LIBRARY.** OpenEXR's reader and LibRaw's are C++ APIs
+# with no C face this seam can use (OpenEXR 3 has a C core, but it is a chunk-level API that would be a second copy of
+# what `ImfRgbaFile` already does correctly), so the two files are `.cpp` and every other file in the directory stays C.
+# The library's own interface does not change: a `cg_image_decoder` is a C struct, and the C++ is behind it.
+file(GLOB DRAWING_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.c" "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
 
 # AGORA: EVERY LIBRARY IN THIS TREE IS SHARED. A consumer loads the whole .so, so an
 # Objective-C category in it is registered whether or not anything references its symbols
@@ -118,6 +122,68 @@ if(WebP_FOUND)
   message(STATUS "drawing: WebP through libwebp")
 else()
   message(STATUS "drawing: no libwebp, so WebP is not a format this build reads")
+endif()
+
+# THE SECOND TIER: JPEG 2000, HEIC/HEIF, AVIF and OpenEXR. Each is a system library with a pkg-config file, found the
+# same way so one reader learns one idiom, and each is OPTIONAL for the same reason as the first tier: a build without
+# the library simply does not list that format in `CGImageSourceCopyTypeIdentifiers`.
+pkg_check_modules(OPENJP2 QUIET IMPORTED_TARGET libopenjp2)
+if(OPENJP2_FOUND)
+  target_compile_definitions(Drawing PRIVATE AGORA_HAVE_OPENJPEG=1)
+  target_link_libraries(Drawing PRIVATE PkgConfig::OPENJP2)
+  message(STATUS "drawing: JPEG 2000 through libopenjp2 ${OPENJP2_VERSION}")
+else()
+  message(STATUS "drawing: no libopenjp2, so JPEG 2000 is not a format this build reads")
+endif()
+
+pkg_check_modules(HEIF QUIET IMPORTED_TARGET libheif)
+if(HEIF_FOUND)
+  target_compile_definitions(Drawing PRIVATE AGORA_HAVE_LIBHEIF=1)
+  target_link_libraries(Drawing PRIVATE PkgConfig::HEIF)
+  message(STATUS "drawing: HEIC/HEIF through libheif ${HEIF_VERSION}")
+else()
+  message(STATUS "drawing: no libheif, so HEIC/HEIF is not a format this build reads")
+endif()
+
+pkg_check_modules(AVIF QUIET IMPORTED_TARGET libavif)
+if(AVIF_FOUND)
+  target_compile_definitions(Drawing PRIVATE AGORA_HAVE_LIBAVIF=1)
+  target_link_libraries(Drawing PRIVATE PkgConfig::AVIF)
+  message(STATUS "drawing: AVIF through libavif ${AVIF_VERSION}")
+else()
+  message(STATUS "drawing: no libavif, so AVIF is not a format this build reads")
+endif()
+
+pkg_check_modules(OPENEXR QUIET IMPORTED_TARGET OpenEXR)
+if(OPENEXR_FOUND)
+  target_compile_definitions(Drawing PRIVATE AGORA_HAVE_OPENEXR=1)
+  target_link_libraries(Drawing PRIVATE PkgConfig::OPENEXR)
+  message(STATUS "drawing: OpenEXR through OpenEXR ${OPENEXR_VERSION}")
+else()
+  message(STATUS "drawing: no OpenEXR, so EXR is not a format this build reads")
+endif()
+
+# **LIBRAW'S `-fopenmp` IS DROPPED ON PURPOSE.** Its pkg-config file carries `-fopenmp`, which CLANG turns into `-lomp` —
+# a runtime this machine has no copy of — while libraw itself is linked against GCC's `libgomp` and loads it by itself.
+# So the include paths and the `-l` list are taken and the OpenMP flag is not: the library's own NEEDED entry is what makes
+# OpenMP work, and adding a second runtime would be two OpenMPs in one process.
+pkg_check_modules(LIBRAW QUIET libraw_r)
+if(LIBRAW_FOUND)
+  target_compile_definitions(Drawing PRIVATE AGORA_HAVE_LIBRAW=1)
+  target_include_directories(Drawing PRIVATE ${LIBRAW_INCLUDE_DIRS})
+  target_link_libraries(Drawing PRIVATE ${LIBRAW_LIBRARIES})
+  message(STATUS "drawing: camera RAW through LibRaw ${LIBRAW_VERSION}")
+else()
+  message(STATUS "drawing: no LibRaw, so camera RAW is not a format this build reads")
+endif()
+
+pkg_check_modules(LIBJXL QUIET IMPORTED_TARGET libjxl)
+if(LIBJXL_FOUND)
+  target_compile_definitions(Drawing PRIVATE AGORA_HAVE_LIBJXL=1)
+  target_link_libraries(Drawing PRIVATE PkgConfig::LIBJXL)
+  message(STATUS "drawing: JPEG XL through libjxl ${LIBJXL_VERSION}")
+else()
+  message(STATUS "drawing: no libjxl, so JPEG XL is not a format this build reads")
 endif()
 
 set_target_properties(Drawing PROPERTIES OUTPUT_NAME agora-drawing)

@@ -24,6 +24,14 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+/* **THE TWO C++ DECODERS CALL `cg_image_from_bgra`, SO THESE DECLARATIONS NEED C LINKAGE.** A C++ translation unit that
+ * included this header without the block below would mangle the name, and the link would fail with "undefined reference to
+ * cg_image_from_bgra(unsigned char const*, ...)" — which is exactly how it failed first. The struct type needs no linkage,
+ * but the decoder symbols the registry reads do, so the whole block is inside one `extern "C"`. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct cg_image_decoder {
 	const char *uti;		/* `public.tiff`, `com.compuserve.gif`, … */
 	const char *extensions;		/* what the refusal message offers a person: "tif tiff" */
@@ -48,6 +56,12 @@ extern const cg_image_decoder cg_decoder_tga;
 extern const cg_image_decoder cg_decoder_icns;
 extern const cg_image_decoder cg_decoder_tiff;
 extern const cg_image_decoder cg_decoder_webp;
+extern const cg_image_decoder cg_decoder_jp2;
+extern const cg_image_decoder cg_decoder_heif;
+extern const cg_image_decoder cg_decoder_avif;
+extern const cg_image_decoder cg_decoder_exr;
+extern const cg_image_decoder cg_decoder_jxl;
+extern const cg_image_decoder cg_decoder_raw;
 
 /* THE DIB AN ICO WRAPS IS THE SAME STRUCTURE A BMP HOLDS, so `CGImageBMP.c` reads it once for both. `allow_png` is the
  * ICO's rule that a large entry may be a PNG instead; `out_*` are the answers the registry's `-size` door needs. */
@@ -62,5 +76,9 @@ bool cg_jpeg_probe(const unsigned char *bytes, size_t length);
 /* THE INTERNAL HEADER THE PROVIDER API NEEDS, for a decoder that has to hand embedded bytes (an ICO's PNG, a TIFF's
  * samples) back to one of those doors. */
 #include <CoreGraphics/CGDataProvider_internal.h>
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CORE_GRAPHICS_CGIMAGESOURCE_INTERNAL_H */

@@ -128,7 +128,25 @@ static const cg_image_decoder *const fn_decoders[] = {
 	&cg_decoder_bmp,
 	&cg_decoder_ico,
 	&cg_decoder_icns,
-	&cg_decoder_tga
+	&cg_decoder_tga,
+#ifdef AGORA_HAVE_OPENJPEG
+	&cg_decoder_jp2,
+#endif
+#ifdef AGORA_HAVE_LIBHEIF
+	&cg_decoder_heif,
+#endif
+#ifdef AGORA_HAVE_LIBAVIF
+	&cg_decoder_avif,
+#endif
+#ifdef AGORA_HAVE_OPENEXR
+	&cg_decoder_exr,
+#endif
+#ifdef AGORA_HAVE_LIBJXL
+	&cg_decoder_jxl,
+#endif
+#ifdef AGORA_HAVE_LIBRAW
+	&cg_decoder_raw
+#endif
 };
 
 #define FN_DECODER_COUNT (sizeof fn_decoders / sizeof fn_decoders[0])

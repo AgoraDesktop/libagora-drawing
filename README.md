@@ -262,11 +262,23 @@ viewer needs — `CreateWithData`, `GetType`, `GetCount`, `CreateImageAtIndex`, 
 | ICO | the same DIB reader (`cg_dib_decode`), plus the PNG a large entry may hold | n |
 | ICNS | four-letter elements whose payload is PNG or JPEG | n |
 | TGA | this tree's own, colour-mapped/true-colour/gray and the RLE variants | 1 |
+| JPEG 2000 | OpenJPEG (system): a memory stream, 1/3/4 components at 8 bits | 1 |
+| HEIC/HEIF | libheif (system) + its HEVC/AV1 plugins, `heif_decode_image` to interleaved RGBA | n |
+| AVIF | libavif (system), `avifImageYUVToRGB`; a deep file is converted to 8 bits and says so | n |
+| OpenEXR | OpenEXR (system), `ImfRgbaFile` through a seeking memory stream, half-float clamped to 8 bits | 1 |
+| JPEG XL | libjxl (system), its event loop read to `JXL_DEC_FULL_IMAGE` | 1 |
+| camera RAW | LibRaw (system), `dcraw_process`'s default demosaic; the probe names the non-TIFF containers and asks LibRaw about the TIFF-shaped ones | 1 |
 
-**THE TWO EXTERNAL CODECS ARE SYSTEM LIBRARIES AND THE FIVE IN-TREE ONES ARE IN-TREE ON PURPOSE.** libtiff and libwebp are
-`find_package`d; a machine without one simply does not offer that format (`-CopyTypeIdentifiers` is built from what
+**EIGHT OF THE THIRTEEN COME FROM SYSTEM LIBRARIES AND FIVE ARE IN-TREE ON PURPOSE.** libtiff, libwebp, libopenjp2, libheif, libavif, OpenEXR, libjxl and LibRaw are
+found with `find_package`/`pkg_check_modules`; a machine without one simply does not offer that format (`-CopyTypeIdentifiers` is built from what
 compiled, so the list can never promise a decoder that is not there). BMP, GIF, ICO, ICNS and TGA are each a signature and
-a few hundred lines — a library for one of those would be a dependency larger than the code it replaces. MEASURED
+a few hundred lines — a library for one of those would be a dependency larger than the code it replaces.
+
+**AND TWO OF THE FILES ARE C++, WHICH IS THE ONLY C++ IN THIS LIBRARY.** OpenEXR's reader and LibRaw's are C++ APIs whose C
+faces are either absent (LibRaw) or a chunk-level API that would re-implement what `ImfRgbaFile` already does (OpenEXR 3's
+core). So `CGImageEXR.cpp` and `CGImageRAW.cpp` are the exceptions, the library's interface is still a C struct of function
+pointers, and `CGImageSource_internal.h` wraps its declarations in `extern "C"` for exactly them — a mangled
+`cg_image_from_bgra` was the first link failure. MEASURED
 (`tests/image_source.c`, fixtures built byte by byte): a 2×2 BMP whose bottom-up rows land the right way up, a 2×2 TGA, a
 two-frame GIF whose frames decode to different colours and whose delay comes back as 0.1 s, a text file refused by name,
 and every format's UTI in the list. MEASURED against real files too: PAL's own fixtures for TIFF, WebP (still and

@@ -82,6 +82,7 @@ set_tests_properties(colour-glyphs PROPERTIES ENVIRONMENT
 # library are the only two things here; zlib is the library's PRIVATE dependency, reached through the .so.
 add_executable(image_source image_source.c)
 target_link_libraries(image_source PRIVATE Drawing CoreFoundation::CoreFoundation)
+target_compile_definitions(image_source PRIVATE AGORA_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 add_test(NAME image_source COMMAND image_source)
 set_tests_properties(image_source PROPERTIES ENVIRONMENT
   "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")

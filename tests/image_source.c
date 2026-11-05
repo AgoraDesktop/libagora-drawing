@@ -317,11 +317,81 @@ static void check_refusal(void)
 	CFRelease(data);
 }
 
+/* ---- THE FORMATS WHOSE FIXTURES ARE CHECKED IN -----------------------------------------------------
+ *
+ * **A JP2, AN AVIF, A HEIC AND AN EXR CANNOT BE BUILT BYTE BY BYTE IN A TEST THE WAY A BMP CAN** — a JPEG 2000 codestream is
+ * an arithmetic-coded image, an AVIF is an AV1 frame, a HEIC is an HEVC frame, and an EXR is a chunked float image, each
+ * produced by an encoder rather than assembled. So those four are checked in: 40x30, solid rgb(200,40,40), a few hundred
+ * bytes each (the EXR is 8 KB because it is float), and the test decodes each one and checks the colour it was made with.
+ * A fixture whose pixels were not checked would only prove that a decoder ran.
+ */
+static CFDataRef load_fixture(const char *name)
+{
+	char path[512];
+	FILE *file;
+	long size;
+	unsigned char *bytes;
+	CFDataRef data;
+
+	snprintf(path, sizeof path, "%s/%s", AGORA_FIXTURE_DIR, name);
+	file = fopen(path, "rb");
+	if (file == NULL) {
+		fprintf(stderr, "FAIL: the fixture %s is missing\n", path);
+		failures++;
+		return NULL;
+	}
+	fseek(file, 0, SEEK_END);
+	size = ftell(file);
+	fseek(file, 0, SEEK_SET);
+	bytes = malloc((size_t)size);
+	if (bytes == NULL || fread(bytes, 1, (size_t)size, file) != (size_t)size) {
+		fclose(file);
+		free(bytes);
+		failures++;
+		return NULL;
+	}
+	fclose(file);
+	data = CFDataCreate(kCFAllocatorDefault, bytes, (CFIndex)size);
+	free(bytes);
+	return data;
+}
+
+static void check_fixture(const char *name, const char *uti)
+{
+	CFDataRef data = load_fixture(name);
+	CGImageSourceRef source;
+	CGImageRef image;
+	unsigned char px[4];
+
+	if (data == NULL) {
+		return;
+	}
+	source = CGImageSourceCreateWithData(data, NULL);
+	CHECK(source != NULL, "%s did not open", name);
+	if (source != NULL) {
+		type_is(source, uti, name);
+		image = CGImageSourceCreateImageAtIndex(source, 0, NULL);
+		CHECK(image != NULL, "%s did not decode", name);
+		if (image != NULL) {
+			CHECK(CGImageGetWidth(image) == 40 && CGImageGetHeight(image) == 30, "%s is not 40x30", name);
+			pixel_of(image, 20, 15, px);
+			/* THE FIXTURE IS SOLID rgb(200,40,40); a lossy codec moves a channel by a few steps, which is why this
+			 * is a range rather than an equality. */
+			CHECK(px[2] > 170 && px[2] < 230 && px[1] < 80 && px[0] < 80,
+			      "%s's centre is not red, got B=%u G=%u R=%u", name, px[0], px[1], px[2]);
+			CGImageRelease(image);
+		}
+		CGImageSourceRelease(source);
+	}
+	CFRelease(data);
+}
+
 /* THE LIST A BUNDLE'S DOCUMENT TYPES SHOULD AGREE WITH: every format whose fixture above decoded has to be in it. */
 static void check_type_list(void)
 {
 	static const char *const expected[] = { "public.png", "public.jpeg", "com.compuserve.gif", "com.microsoft.bmp",
-					       "com.microsoft.ico", "com.apple.icns", "com.truevision.tga-image" };
+					       "com.microsoft.ico", "com.apple.icns", "com.truevision.tga-image",
+					       "public.jpeg-2000", "public.avif", "public.heic", "com.ilm.openexr-image" };
 	CFArrayRef utis = CGImageSourceCopyTypeIdentifiers();
 	size_t i;
 
@@ -353,6 +423,10 @@ int main(void)
 	check_bmp();
 	check_tga();
 	check_gif();
+	check_fixture("red.jp2", "public.jpeg-2000");
+	check_fixture("red.avif", "public.avif");
+	check_fixture("red.heic", "public.heic");
+	check_fixture("red.exr", "com.ilm.openexr-image");
 	check_refusal();
 	check_type_list();
 	if (failures != 0) {
