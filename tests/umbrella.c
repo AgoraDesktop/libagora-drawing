@@ -31,6 +31,7 @@ static const char *s_internal[] = {
 	"CGFunction_internal",
 	"CGGradient_internal",
 	"CGImage_internal",
+	"CGImageSource_internal",
 	"CGPaint_internal",
 	"CGPath_internal",
 	"CGPattern_internal",

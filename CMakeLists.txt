@@ -92,6 +92,34 @@ option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 
 add_library(Drawing SHARED ${DRAWING_SOURCES})
 
+# ---------------------------------------------------------------------------
+# THE OPTIONAL IMAGE CODECS: a format whose library is present is a format this build reads, and one whose library is
+# absent is simply not in `CGImageSourceCopyTypeIdentifiers` — the registry is built from what compiled, so the list can
+# never promise a decoder that is not there.
+#
+# TIFF and WebP are SYSTEM libraries here (libtiff-dev and libwebp-dev), which is this tree's rule for a codec: the
+# decoder that already exists, maintained, over a copy in the tree. The in-tree formats (BMP, GIF, ICO, ICNS, TGA) need
+# nothing: each is a signature and a few hundred lines, and a library for a format this small would be a dependency larger
+# than the code it replaces.
+# ---------------------------------------------------------------------------
+find_package(TIFF QUIET)
+if(TIFF_FOUND)
+  target_compile_definitions(Drawing PRIVATE AGORA_HAVE_TIFF=1)
+  target_link_libraries(Drawing PRIVATE TIFF::TIFF)
+  message(STATUS "drawing: TIFF through libtiff ${TIFF_VERSION_STRING}")
+else()
+  message(STATUS "drawing: no libtiff, so TIFF is not a format this build reads")
+endif()
+
+find_package(WebP QUIET)
+if(WebP_FOUND)
+  target_compile_definitions(Drawing PRIVATE AGORA_HAVE_WEBP=1)
+  target_link_libraries(Drawing PRIVATE WebP::webp WebP::webpdemux)
+  message(STATUS "drawing: WebP through libwebp")
+else()
+  message(STATUS "drawing: no libwebp, so WebP is not a format this build reads")
+endif()
+
 set_target_properties(Drawing PROPERTIES OUTPUT_NAME agora-drawing)
 
 # THE REGISTRY'S FIRST DIRECTORY IS THIS ONE, and it is a compile-time fact rather than a guess about the prefix

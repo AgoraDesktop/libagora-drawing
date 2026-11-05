@@ -248,6 +248,30 @@ count (65), a clip under a rotated or skewed CTM (63 — a device-space clip reg
 on a simple font (27), JPX/CCITT/JBIG2-encoded images (16), and 1-bit image masks (11). None of the twelve documents
 loses a page to these any more; each is a piece of a page that is still undrawn.
 
+**AND ONE REGISTRY OPENS EVERY IMAGE FORMAT THIS BUILD CAN READ: `CGImageSource`.** Apple's ImageIO door, in the subset a
+viewer needs — `CreateWithData`, `GetType`, `GetCount`, `CreateImageAtIndex`, `CopyPropertiesAtIndex`,
+`CopyTypeIdentifiers` — with the format decided by the FILE'S BYTES and not by its name:
+
+| format | decoder | frames |
+|---|---|---|
+| PNG, JPEG | `CGImagePNG.c` / `CGImageJPEG.c`, the two that already existed, wrapped rather than re-implemented | 1 |
+| TIFF | libtiff (system), a memory client, one directory per frame | n |
+| WebP | libwebp (system), `WebPDecodeBGRA` for a still and the demuxer for an animation | n |
+| GIF | this tree's own LZW decoder, with disposal, local palettes, interlacing and transparency | n |
+| BMP | this tree's own, 1/4/8/16/24/32-bit, `BI_RGB` and `BI_BITFIELDS` | 1 |
+| ICO | the same DIB reader (`cg_dib_decode`), plus the PNG a large entry may hold | n |
+| ICNS | four-letter elements whose payload is PNG or JPEG | n |
+| TGA | this tree's own, colour-mapped/true-colour/gray and the RLE variants | 1 |
+
+**THE TWO EXTERNAL CODECS ARE SYSTEM LIBRARIES AND THE FIVE IN-TREE ONES ARE IN-TREE ON PURPOSE.** libtiff and libwebp are
+`find_package`d; a machine without one simply does not offer that format (`-CopyTypeIdentifiers` is built from what
+compiled, so the list can never promise a decoder that is not there). BMP, GIF, ICO, ICNS and TGA are each a signature and
+a few hundred lines — a library for one of those would be a dependency larger than the code it replaces. MEASURED
+(`tests/image_source.c`, fixtures built byte by byte): a 2×2 BMP whose bottom-up rows land the right way up, a 2×2 TGA, a
+two-frame GIF whose frames decode to different colours and whose delay comes back as 0.1 s, a text file refused by name,
+and every format's UTI in the list. MEASURED against real files too: PAL's own fixtures for TIFF, WebP (still and
+animated), GIF (animated), BMP, ICO, ICNS and TGA all decode to their stated size and frame count.
+
 **AND A PDF IS WRITTEN: `CGPDFContext` RECORDS DRAWING INTO CONTENT STREAMS AND WRITES THE FILE.** This is the
 half `dataWithPDFInsideRect:` and print-to-PDF need, and it is a RECORDING context rather than a raster one: the
 context has no real surface, every painting door writes the matching operators (paths replayed from

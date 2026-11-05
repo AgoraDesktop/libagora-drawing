@@ -64,6 +64,7 @@
 /* IMAGES */
 #include <CoreGraphics/CGImage.h>
 #include <CoreGraphics/CGImageDestination.h>
+#include <CoreGraphics/CGImageSource.h>
 
 /* FONTS */
 #include <CoreGraphics/CGFont.h>

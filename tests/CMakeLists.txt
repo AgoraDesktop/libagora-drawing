@@ -80,6 +80,12 @@ set_tests_properties(colour-glyphs PROPERTIES ENVIRONMENT
 # THE PDF READER: two fixtures built byte by byte (a classic cross-reference table and a PDF 1.5 xref stream with
 # an object stream), every structural door, and the page transform's rotated geometry. The fixture builder and the
 # library are the only two things here; zlib is the library's PRIVATE dependency, reached through the .so.
+add_executable(image_source image_source.c)
+target_link_libraries(image_source PRIVATE Drawing CoreFoundation::CoreFoundation)
+add_test(NAME image_source COMMAND image_source)
+set_tests_properties(image_source PROPERTIES ENVIRONMENT
+  "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:Drawing>:$<TARGET_FILE_DIR:CoreFoundation::CoreFoundation>")
+
 add_executable(pdf pdf.c)
 target_link_libraries(pdf PRIVATE Drawing CoreFoundation::CoreFoundation)
 
