@@ -116,6 +116,7 @@ struct cg_pdf_doc {
 	bool encrypted;
 	bool unlocked;			/* always false: no decryption here */
 	bool damaged;
+	bool rebuilt;			/* the by-scan recovery has run, once */
 
 	cg_pdf_obj *trailer;		/* the merged trailer dictionary */
 	cg_pdf_obj *catalog;

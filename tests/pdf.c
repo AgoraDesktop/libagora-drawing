@@ -179,6 +179,83 @@ static CFDataRef build_classic(void)
 }
 
 /* ------------------------------------------------------------------------- */
+/* fixture C: a cross-reference section that does not name every object      */
+/* ------------------------------------------------------------------------- */
+
+/* **THE FILE A LINEARIZED EXPORT LEAVES BEHIND, AND THE ONE A READER MUST RECOVER FROM.** Its `startxref` section names
+ * objects 1..4 — the catalog, the page tree, the first page and its content — and NOTHING names objects 5..8, which are
+ * the other two pages and their streams. MEASURED on a 1.8 MB book: this shape opened as ONE page of 469, because the
+ * walk asks for an object the sections never named and the answer was NULL.
+ *
+ * THE FONT IS THE OTHER HALF OF THE FIXTURE, and it is deliberately not a face this tree installs: `TimesNewRoman,Bold`
+ * is the Windows spelling with the style as a comma suffix, and there is no such face. A reader that refuses it draws
+ * no text at all — which is what "some PDFs do not show all the content" looked like. */
+static CFDataRef build_recovered(void)
+{
+	buf_t b = { 0 };
+	size_t offsets[10] = { 0 };
+	const char *first = "BT /F1 18 Tf 10 60 Td (Recovered) Tj ET\n";
+	const char *second = "0.8 0.1 0.1 rg 10 10 80 80 re f\n";
+	const char *third = "0.1 0.1 0.8 rg 10 10 80 80 re f\n";
+	size_t xref;
+	int i;
+
+	buf_printf(&b, "%%PDF-1.4\n");
+
+	offsets[1] = b.len;
+	buf_printf(&b, "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+
+	offsets[2] = b.len;
+	buf_printf(&b, "2 0 obj\n<< /Type /Pages /Kids [3 0 R 5 0 R 6 0 R] /Count 3 "
+		       "/MediaBox [0 0 100 100] >>\nendobj\n");
+
+	offsets[3] = b.len;
+	buf_printf(&b, "3 0 obj\n<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources "
+		       "<< /Font << /F1 9 0 R >> >> >>\nendobj\n");
+
+	offsets[4] = b.len;
+	buf_printf(&b, "4 0 obj\n<< /Length %zu >>\nstream\n%s endstream\nendobj\n",
+		   strlen(first) + 1, first);
+
+	/* EVERYTHING FROM HERE DOWN IS NOT IN THE SECTION BELOW. */
+	offsets[5] = b.len;
+	buf_printf(&b, "5 0 obj\n<< /Type /Page /Parent 2 0 R /Contents 7 0 R >>\nendobj\n");
+
+	offsets[6] = b.len;
+	buf_printf(&b, "6 0 obj\n<< /Type /Page /Parent 2 0 R /Contents 8 0 R >>\nendobj\n");
+
+	offsets[7] = b.len;
+	buf_printf(&b, "7 0 obj\n<< /Length %zu >>\nstream\n%s endstream\nendobj\n",
+		   strlen(second) + 1, second);
+
+	offsets[8] = b.len;
+	buf_printf(&b, "8 0 obj\n<< /Length %zu >>\nstream\n%s endstream\nendobj\n",
+		   strlen(third) + 1, third);
+
+	/* THE FONT, at the end of the file so that it too is outside the section: a simple font with no descriptor and a
+	 * base name this tree has no face for. */
+	offsets[9] = b.len;
+	buf_printf(&b, "9 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /TimesNewRoman,Bold "
+		       "/Encoding /WinAnsiEncoding >>\nendobj\n");
+
+	xref = b.len;
+	buf_printf(&b, "xref\n0 5\n");
+	buf_printf(&b, "0000000000 65535 f \n");
+	for (i = 1; i <= 4; i++) {
+		buf_printf(&b, "%010zu 00000 n \n", offsets[i]);
+	}
+	buf_printf(&b, "trailer\n<< /Size 10 /Root 1 0 R >>\n");
+	buf_printf(&b, "startxref\n%zu\n%%%%EOF\n", xref);
+
+	{
+		CFDataRef data = buf_data(&b);
+
+		free(b.bytes);
+		return data;
+	}
+}
+
+/* ------------------------------------------------------------------------- */
 /* fixture B: cross-reference stream and an object stream                    */
 /* ------------------------------------------------------------------------- */
 
@@ -806,6 +883,106 @@ static void test_render(void)
 	free(buffer);
 }
 
+/* THE RECOVERY AND THE SUBSTITUTE, WHICH ARE TWO DEFECTS WITH ONE SYMPTOM: pages that show nothing. */
+static void test_recovery(void)
+{
+	CFDataRef data = build_recovered();
+	CGDataProviderRef provider = CGDataProviderCreateWithCFData(data);
+
+	if (getenv("AGORA_PDF_DUMP") != NULL) {
+		FILE *f = fopen("/tmp/recovered.pdf", "wb");
+
+		if (f != NULL) {
+			fwrite(CFDataGetBytePtr(data), 1, (size_t)CFDataGetLength(data), f);
+			fclose(f);
+		}
+	}
+	CGPDFDocumentRef document = CGPDFDocumentCreateWithProvider(provider);
+	CGPDFPageRef page;
+
+	CHECK(document != NULL, "the recovery fixture did not open");
+	if (document == NULL) {
+		CGDataProviderRelease(provider);
+		CFRelease(data);
+		return;
+	}
+
+	/* 1. EVERY PAGE THE TREE NAMES IS REACHABLE, though the cross-reference section named one of them. */
+	CHECK(CGPDFDocumentGetNumberOfPages(document) == 3,
+	      "the page tree has %zu page(s); objects 5..8 are only findable by scanning",
+	      CGPDFDocumentGetNumberOfPages(document));
+
+	/* 2. AND A PAGE NOTHING NAMED IS A PAGE. Its own content stream must decode, which is the whole of what the
+	 * recovery buys: a reference that resolved to a dictionary but not to its stream would pass a weaker test. */
+	page = CGPDFDocumentGetPage(document, 3);
+	CHECK(page != NULL, "the third page (object 6, unnamed by the xref) did not resolve");
+	if (page != NULL) {
+		CGPDFContentStreamRef content = CGPDFContentStreamCreateWithPage(page);
+		CFArrayRef streams = CGPDFContentStreamGetStreams(content);
+
+		CHECK(streams != NULL && CFArrayGetCount(streams) == 1,
+		      "the third page has %ld content stream(s), expected 1",
+		      streams != NULL ? (long)CFArrayGetCount(streams) : -1L);
+		if (streams != NULL && CFArrayGetCount(streams) == 1) {
+			CGPDFDataFormat format;
+			CFDataRef text = CGPDFStreamCopyData((CGPDFStreamRef)CFArrayGetValueAtIndex(streams, 0), &format);
+
+			CHECK(text != NULL && CFDataGetLength(text) > 8,
+			      "the third page's content stream did not decode");
+			CFRelease(text);
+		}
+		if (streams != NULL) {
+			CFRelease(streams);
+		}
+		CGPDFContentStreamRelease(content);
+	}
+
+	/* 3. THE TEXT IS DRAWN WITH A SUBSTITUTE FACE. `TimesNewRoman,Bold` is a name no face here answers, so ink on the
+	 * first page can only have come from the family substitution — a refusal would leave the page blank. */
+	{
+		unsigned char *buffer = calloc(200, 200 * 4);
+		CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+		CGContextRef ctx = CGBitmapContextCreate(buffer, 200, 200, 8, 200 * 4, rgb,
+							 kCGImageAlphaPremultipliedFirst |
+							 kCGBitmapByteOrder32Little);
+		unsigned char px[4];
+		int text_ink = 0;
+		size_t x;
+		size_t y;
+
+		CHECK(ctx != NULL, "the recovery render target was refused");
+		if (ctx != NULL && CGPDFDocumentGetPage(document, 1) != NULL) {
+			CGContextDrawPDFPage(ctx, CGPDFDocumentGetPage(document, 1));
+			/* **THE WHOLE TARGET IS SEARCHED, BECAUSE THE FIRST PAGE HAS NOTHING ON IT BUT THE TEXT.** A band
+			 * computed from the page's geometry would also be a second copy of `CGPDFPageGetDrawingTransform`'s
+			 * arithmetic in the test — and it was, and it was wrong (the renderer draws in PAGE units, so the
+			 * glyphs sat at y 60..78 and not at the doubled 120..156), which is the kind of check that fails for
+			 * its own mistake. Dark ink anywhere on this page IS the text. */
+			for (y = 0; y < 200 && !text_ink; y++) {
+				for (x = 0; x < 200; x++) {
+					pixel_at(buffer, 200, 200, CGPointMake((CGFloat)x, (CGFloat)y), px);
+
+					if (px[3] > 100 && px[0] < 100 && px[1] < 100 && px[2] < 100) {
+						text_ink = 1;
+						break;
+					}
+				}
+			}
+			CHECK(text_ink, "no ink was drawn for text in a font this tree has no face for — "
+			      "the family substitution did not run");
+		}
+		if (ctx != NULL) {
+			CGContextRelease(ctx);
+		}
+		CGColorSpaceRelease(rgb);
+		free(buffer);
+	}
+
+	CGPDFDocumentRelease(document);
+	CGDataProviderRelease(provider);
+	CFRelease(data);
+}
+
 static void test_refusals(void)
 {
 	static const char not_a_pdf[] = "this is not a PDF file\n";
@@ -856,6 +1033,7 @@ int main(void)
 	test_xref_stream();
 	test_scanner();
 	test_render();
+	test_recovery();
 	test_refusals();
 	test_url();
 	if (failures != 0) {

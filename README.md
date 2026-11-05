@@ -211,6 +211,43 @@ than only fixtures: `/usr/share/doc/quilt/quilt.pdf` (pdfTeX, twelve pages of Ty
 `/usr/share/cups/data/default-testpage.pdf` (paths, quadratic logo outlines, CMYK colour wheels) render as poppler
 renders them.
 
+**AND THE TWO WAYS A REAL FILE USED TO SHOW LESS THAN IT CONTAINS ARE MEASURED AND FIXED.** Twelve PDFs from a
+reader's own shelf — datasheets, a compiler manual, a 469-page book, magazine scans — rendered page by page and
+compared before and after:
+
+- **A CROSS-REFERENCE SECTION THAT DOES NOT NAME EVERY OBJECT.** A linearized file (PDF 1.4's first-page
+  optimisation) has two sections, and an edited or re-saved one can leave `startxref`, `/Prev` and the tables
+  disagreeing. MEASURED: `Programming the 65816.pdf` (1.8 MB, `/Count 469`) opened as **one page**, and an
+  Espressif product brief as one of **thirty** — the page-tree walk printed "deeper than 64 levels or has a
+  missing node" fifty-four times because 1,860 of the 1,907 objects had no entry. The reader now RECOVERS, once
+  per document and only when something asks for an object no section named: it scans the body for `N G obj`
+  headers and takes the LAST occurrence of each number (an incremental update's copy is the one in force), leaving
+  entries the tables did name untouched, because a table carries a generation and a scan carries only an offset.
+  After: **469 pages and 30 pages**, and the same walk over the twelve-file corpus opens every document's full
+  page count.
+- **A FONT NAME IN ANOTHER HOUSE'S SPELLING.** The substitution table was ten Adobe names compared with `strcmp`,
+  so `TimesNewRoman`, `TimesNewRoman,Bold`, `Arial,BoldItalic`, `Plantin` and `Univers` all fell through to
+  "has no embedded program and no face of that name; text using it is not drawn". MEASURED: **1,875 runs of text
+  in one 84-page manual, 319 in a twelve-page datasheet**, 28 of the 84 pages completely blank. A name is now read
+  as FAMILY + STYLE — the family normalised past case, spaces and hyphens, the style taken from a `,` or `-`
+  suffix or glued on — and substituted with the metrically similar installed face (serif / sans / mono / symbol,
+  bold and italic honoured, the plain face as a last resort), which is what every other reader does. An embedded
+  program still wins. After: the manual's ink goes **0.008 → 0.086 with no blank pages**, the datasheet's
+  **0.103 → 0.177**, and no text is refused anywhere in the corpus.
+
+Both have a door for the next such file: `CGPDF_XREF_DIAG` prints each cross-reference section and its `/Prev`
+chain, what the recovery found, and `CGPDF_PAGE_DIAG` prints one line per page-tree node — depth, `/Type`,
+`/Count`, kid count, and the object number of a kid that did not resolve. MEASURED (tests/pdf.c, fixture C): a
+three-page file whose section names one page, whose other two pages and font exist only in the body, and whose
+font is `TimesNewRoman,Bold` — the count is three, the unnamed page's stream decodes, and the text's ink lands.
+
+**WHAT IS STILL MISSING FROM THE RENDERER, NAMED RATHER THAN DISCOVERED LATER.** The same twelve files, after both
+fixes, still refuse (with a `CG-REFUSE` naming the reason): an image XObject whose colour space cannot be converted
+(134 times), inline images `BI … ID … EI` (68 — the scanner skips them), a colour space with no readable component
+count (65), a clip under a rotated or skewed CTM (63 — a device-space clip region is axis-aligned), `/MacRomanEncoding`
+on a simple font (27), JPX/CCITT/JBIG2-encoded images (16), and 1-bit image masks (11). None of the twelve documents
+loses a page to these any more; each is a piece of a page that is still undrawn.
+
 **AND A PDF IS WRITTEN: `CGPDFContext` RECORDS DRAWING INTO CONTENT STREAMS AND WRITES THE FILE.** This is the
 half `dataWithPDFInsideRect:` and print-to-PDF need, and it is a RECORDING context rather than a raster one: the
 context has no real surface, every painting door writes the matching operators (paths replayed from

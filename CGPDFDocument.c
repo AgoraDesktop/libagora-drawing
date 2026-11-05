@@ -284,6 +284,9 @@ static bool fn_read_classic_xref(cg_pdf_doc *doc, cg_pdf_lexer *lx, size_t *prev
 		if (count < 0 || count > 10000000) {
 			return false;
 		}
+		if (getenv("CGPDF_XREF_DIAG") != NULL) {
+			fprintf(stderr, "  DIAG xref: subsection start %lld count %lld\n", start, count);
+		}
 		{
 			long long i;
 
@@ -475,7 +478,32 @@ static bool fn_load_xref(cg_pdf_doc *doc)
 			break;
 		}
 		previous = offset;
-		if (!fn_read_xref_section(doc, offset, &next)) {
+		if (getenv("CGPDF_XREF_DIAG") != NULL) {
+			size_t before = 0;
+			size_t i;
+
+			for (i = 0; i < doc->xref_count; i++) {
+				if (doc->xref[i].present) {
+					before++;
+				}
+			}
+			fprintf(stderr, "  DIAG xref: section at %zu (previous %zu), entries present before %zu\n",
+				offset, previous, before);
+			if (!fn_read_xref_section(doc, offset, &next)) {
+				fprintf(stderr, "  DIAG xref: that section FAILED\n");
+				break;
+			}
+			{
+				size_t after = 0;
+
+				for (i = 0; i < doc->xref_count; i++) {
+					if (doc->xref[i].present) {
+						after++;
+					}
+				}
+				fprintf(stderr, "  DIAG xref: it added %zu entries; /Prev now %zu\n", after - before, next);
+			}
+		} else if (!fn_read_xref_section(doc, offset, &next)) {
 			break;
 		}
 		offset = next;
@@ -587,6 +615,136 @@ static bool fn_load_object_stream(cg_pdf_doc *doc, unsigned stream_number)
 	return true;
 }
 
+/* **THE CROSS-REFERENCE A FILE'S OWN SECTIONS NEVER NAMED, FOUND BY SCANNING.** A PDF's `/Prev` chain is supposed to
+ * cover every object; a LINEARIZED file (PDF 1.4's first-page optimisation) puts its first-page section at the end and
+ * its main section elsewhere, and an edited or re-saved file can leave `startxref`, `/Prev` and the tables disagreeing.
+ * MEASURED on a 1.8 MB book: the chain read 38 objects — the ones a first-page section names — and the other 1,860 were
+ * unreachable, so a 469-page document opened as ONE page and printed "the page tree is deeper than 64 levels or has a
+ * missing node" fifty-four times.
+ *
+ * The recovery every reader has is the same one: scan the file body for `N G obj` headers and take the LAST occurrence
+ * of each number, because a later one is a newer revision in an incrementally updated file. Entries the sections did
+ * name are LEFT ALONE — a table has a generation and a type and a scan has only an offset — and only numbers nothing
+ * named are filled in, so a damaged section cannot overwrite a good one.
+ *
+ * It runs at most once per document, and only when something asks for an object no section named: a healthy file never
+ * pays for it. */
+static int s_rebuild_added;
+static int s_rebuild_candidates;
+static int s_rebuild_headers;
+
+static void fn_rebuild_xref(cg_pdf_doc *doc)
+{
+	size_t i;
+
+	s_rebuild_added = 0;
+	s_rebuild_candidates = 0;
+	s_rebuild_headers = 0;
+
+	if (doc->rebuilt || doc->bytes == NULL) {
+		return;
+	}
+	doc->rebuilt = true;
+	for (i = 0; i + 2 < doc->size; i++) {
+		size_t at;
+		size_t num_start;
+		unsigned long long num = 0;
+		unsigned long long gen = 0;
+		unsigned digits = 0;
+
+		if (doc->bytes[i] != 'o' || doc->bytes[i + 1] != 'b' || doc->bytes[i + 2] != 'j') {
+			continue;
+		}
+		s_rebuild_candidates++;
+		if (i > 0 && (doc->bytes[i - 1] == 'b' || doc->bytes[i - 1] == 'o')) {
+			continue;	/* `bobj`/`oobj`: inside a word, not a header */
+		}
+		at = i;
+		/* GENERATION, BEFORE THE `obj`. */
+		while (at > 0 && (doc->bytes[at - 1] == ' ' || doc->bytes[at - 1] == '\r' ||
+				  doc->bytes[at - 1] == '\n' || doc->bytes[at - 1] == '\t')) {
+			at--;
+		}
+		{
+			size_t end = at;
+			size_t begin = end;
+
+			while (begin > 0 && doc->bytes[begin - 1] >= '0' && doc->bytes[begin - 1] <= '9') {
+				begin--;
+			}
+			if (begin == end) {
+				continue;
+			}
+			{
+				/* A SEPARATE INDEX: the `for` below used to advance `begin` itself, so the `at = begin` that
+				 * follows read the END of the digits and every ordinary header was lost. */
+				size_t k;
+
+				for (k = begin; k < end; k++) {
+					gen = gen * 10 + (unsigned long long)(doc->bytes[k] - '0');
+					digits++;
+				}
+			}
+			if (digits > 10) {
+				continue;
+			}
+			/* BACK PAST THE GENERATION'S DIGITS, not merely past the whitespace that preceded them: `at` is where the
+			 * digits END, and the object number is the next thing BEFORE `begin`. MEASURED: leaving this as `at = end`
+			 * read the GENERATION as the object number, so every ordinary `N 0 obj` header was skipped as "object 0"
+			 * and the recovery found one object out of 1,915. */
+			at = begin;
+		}
+		while (at > 0 && (doc->bytes[at - 1] == ' ' || doc->bytes[at - 1] == '\r' ||
+				  doc->bytes[at - 1] == '\n' || doc->bytes[at - 1] == '\t')) {
+			at--;
+		}
+		{
+			size_t end = at;
+			size_t begin = end;
+
+			while (begin > 0 && doc->bytes[begin - 1] >= '0' && doc->bytes[begin - 1] <= '9') {
+				begin--;
+			}
+			if (begin == end) {
+				continue;
+			}
+			num_start = begin;
+			digits = 0;
+			{
+				size_t k;
+
+				for (k = begin; k < end; k++) {
+					num = num * 10 + (unsigned long long)(doc->bytes[k] - '0');
+					digits++;
+				}
+			}
+			if (digits > 10 || num == 0 || num > 10000000) {
+				continue;	/* not an object number a file can have */
+			}
+			s_rebuild_headers++;
+		}
+		if (fn_xref_grow(doc, (size_t)num + 1)) {
+			/* LATER WINS: an incremental update's copy of an object is the one in force. */
+			doc->xref[num].present = 1;
+			doc->xref[num].type = 1;
+			doc->xref[num].a = (unsigned long long)num_start;
+			doc->xref[num].b = gen;
+			s_rebuild_added++;
+		}
+	}
+	if (getenv("CGPDF_XREF_DIAG") != NULL) {
+		size_t present = 0;
+
+		for (i = 0; i < doc->xref_count; i++) {
+			if (doc->xref[i].present) {
+				present++;
+			}
+		}
+		fprintf(stderr, "  DIAG xref: rebuilt by scanning — %zu object(s) now named (%d added, %d candidate "
+			"`obj`, %d header(s))\n", present, s_rebuild_added, s_rebuild_candidates, s_rebuild_headers);
+	}
+}
+
 cg_pdf_obj *cg_pdf_object_number(cg_pdf_doc *doc, unsigned num)
 {
 	cg_pdf_xref_entry *entry;
@@ -600,6 +758,18 @@ cg_pdf_obj *cg_pdf_object_number(cg_pdf_doc *doc, unsigned num)
 		return obj;
 	}
 	if (num >= doc->xref_count || !doc->xref[num].present) {
+		/* **NOTHING NAMED IT: THE FILE'S OWN SECTIONS ARE INCOMPLETE, SO RECOVER ONCE AND ASK AGAIN.** This is the
+		 * one place every object lookup passes through, which is why the recovery lives here rather than in each
+		 * caller that could notice a NULL. */
+		if (!doc->rebuilt) {
+			fn_rebuild_xref(doc);
+			if (num < doc->xref_count && doc->xref[num].present && doc->cache != NULL) {
+				doc->cache[num] = NULL;	/* a NULL cached from before the rebuild is not an answer any more */
+			}
+			if (num < doc->xref_count && doc->xref[num].present) {
+				return cg_pdf_object_number(doc, num);
+			}
+		}
 		return NULL;
 	}
 	entry = &doc->xref[num];
@@ -722,6 +892,25 @@ static void fn_walk_pages(cg_pdf_doc *doc, cg_pdf_obj *node, fn_inherited inh, i
 				"the walk stops there\n");
 		return;
 	}
+	/* **AND WHY, WHEN A PAGE TREE IS DAMAGED OR SIMPLY ODDER THAN THIS WALK EXPECTS.** "The walk stops there" is the
+	 * kind of message that names a symptom and hides the cause; MEASURED on a 1.8 MB book that came out as ONE page,
+	 * the cause was fifty-four unresolvable `/Kids` entries, and the only way to see that was to print what each node
+	 * actually is. `CGPDF_PAGE_DIAG` prints one line per node — depth, `/Type`, `/Count`, the number of kids, and the
+	 * object number of a kid that did not resolve. */
+	if (getenv("CGPDF_PAGE_DIAG") != NULL) {
+		cg_pdf_obj *diag_type = cg_pdf_dict_get(doc, node, "Type");
+		cg_pdf_obj *diag_kids = cg_pdf_dict_get(doc, node, "Kids");
+		long long diag_count = -1;
+		const char *diag_name = "?";
+
+		(void)cg_pdf_integer(doc, cg_pdf_dict_get(doc, node, "Count"), &diag_count);
+		if (diag_type != NULL && diag_type->type == kCGPDFObjectTypeName) {
+			diag_name = (const char *)diag_type->u.name.bytes;
+		}
+		fprintf(stderr, "  DIAG page: depth %d /%s count %lld kids %lu\n", depth, diag_name, diag_count,
+			(unsigned long)((diag_kids != NULL && diag_kids->type == kCGPDFObjectTypeArray)
+					 ? diag_kids->u.array.count : 0));
+	}
 	if (doc->page_count > 1000000) {
 		return;
 	}
@@ -754,8 +943,15 @@ static void fn_walk_pages(cg_pdf_doc *doc, cg_pdf_obj *node, fn_inherited inh, i
 		}
 		count = kids->u.array.count;
 		for (i = 0; i < count; i++) {
-			cg_pdf_obj *kid = cg_pdf_resolve(doc, kids->u.array.items[i]);
+			cg_pdf_obj *raw = kids->u.array.items[i];
+			cg_pdf_obj *kid = cg_pdf_resolve(doc, raw);
 
+			if (kid == NULL && getenv("CGPDF_PAGE_DIAG") != NULL) {
+				fprintf(stderr, "  DIAG page: kid %lu at depth %d did NOT resolve (%s %u %u)\n", (unsigned long)i,
+					depth, (raw != NULL && raw->type == CG_PDF_OBJ_REFERENCE) ? "ref" : "direct",
+					(raw != NULL && raw->type == CG_PDF_OBJ_REFERENCE) ? raw->u.ref.num : 0,
+					(raw != NULL && raw->type == CG_PDF_OBJ_REFERENCE) ? raw->u.ref.gen : 0);
+			}
 			fn_walk_pages(doc, kid, inh, depth + 1);
 		}
 		return;
