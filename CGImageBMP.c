@@ -40,6 +40,86 @@ static unsigned long fn_le32(const unsigned char *p)
 /* THE DIB, WITHOUT ITS CALLER'S WRAPPER. `dib` points at a `BITMAPINFOHEADER`; `*has_alpha` says whether a 32-bit image's
  * fourth byte is alpha (see the file's note), and `flip_rows` is the caller's answer for ICO, whose rows are always
  * bottom-up whatever the header claims. */
+/* **BI_RLE8, WHICH IS HOW EVERY CLASSIC WINAMP 2 SHEET IS SAVED.** A byte-count/byte-value stream: a non-zero count
+ * repeats the next byte that many times, and a zero count introduces an escape — 0 ends the line, 1 the bitmap, 2 is a
+ * delta in pixels, and anything from 3 up is a run of that many literal bytes padded to an even boundary. Rows are
+ * bottom-up, like an uncompressed bitmap, so the stream's first row is the image's last.
+ *
+ * The palette is where the uncompressed path finds it, `dib + header_size`, and the answer is the same BGRA the rest of
+ * this file produces, so every caller downstream is unchanged. */
+static unsigned char *fn_rle8_to_bgra(const unsigned char *dib, size_t length, size_t header_size,
+                                      size_t palette_entries, size_t offset, size_t width, size_t height,
+                                      bool top_down)
+{
+	unsigned char *bgra = calloc(width * 4u * height, 1);
+	size_t x = 0;
+	size_t y = 0;
+	size_t p = offset;
+
+	if (bgra == NULL) {
+		return NULL;
+	}
+	while (p + 2 <= length) {
+		unsigned count = dib[p];
+		unsigned value = dib[p + 1];
+		size_t run;
+
+		p += 2;
+		if (count > 0) {
+			for (run = 0; run < count && x < width && y < height; run++, x++) {
+				if (value < palette_entries) {
+					const unsigned char *entry = dib + header_size + (size_t)value * 4u;
+					unsigned char *out = bgra + (top_down ? y : (height - 1u - y)) * width * 4u + x * 4u;
+
+					out[0] = entry[0];
+					out[1] = entry[1];
+					out[2] = entry[2];
+					out[3] = 255;
+				}
+			}
+			continue;
+		}
+		if (value == 0) {
+			x = 0;
+			y++;
+			continue;
+		}
+		if (value == 1) {
+			break;
+		}
+		if (value == 2) {
+			if (p + 2 > length) {
+				break;
+			}
+			x += dib[p];
+			y += dib[p + 1];
+			p += 2;
+			continue;
+		}
+		/* an absolute run of `value` bytes, padded to an even boundary */
+		{
+			unsigned n = value;
+			unsigned i;
+
+			for (i = 0; i < n && x < width && y < height; i++, x++) {
+				unsigned index = dib[p + i];
+
+				if (index < palette_entries) {
+					const unsigned char *entry = dib + header_size + (size_t)index * 4u;
+					unsigned char *out = bgra + (top_down ? y : (height - 1u - y)) * width * 4u + x * 4u;
+
+					out[0] = entry[0];
+					out[1] = entry[1];
+					out[2] = entry[2];
+					out[3] = 255;
+				}
+			}
+			p += n + (n & 1u);
+		}
+	}
+	return bgra;
+}
+
 CGImageRef cg_dib_decode(const unsigned char *dib, size_t length, size_t *out_width, size_t *out_height,
 			 bool *out_has_alpha, bool allow_png)
 {
@@ -109,7 +189,7 @@ CGImageRef cg_dib_decode(const unsigned char *dib, size_t length, size_t *out_wi
 			planes);
 		return NULL;
 	}
-	if (compression != 0 && compression != 3) {
+	if (compression != 0 && compression != 1 && compression != 3) {
 		fprintf(stderr, "CG-REFUSE: bitmap compression %lu (RLE, Huffman, JPEG or alpha-bitfields) is not "
 				"read by this decoder\n", compression);
 		return NULL;
@@ -148,6 +228,25 @@ CGImageRef cg_dib_decode(const unsigned char *dib, size_t length, size_t *out_wi
 	offset += palette_size;
 	row_bytes = ((size_t)width * (size_t)bpp + 31u) / 32u * 4u;
 	stride = row_bytes;
+	if (compression == 1) {
+		/* **RLE8 IS A STREAM, SO IT HAS NO ROW STRIDE TO CHECK.** Its own decoder bounds every run against the image. */
+		unsigned char *rle;
+
+		if (bpp != 8) {
+			fprintf(stderr, "CG-REFUSE: BI_RLE8 is an eight-bit encoding; this bitmap says %u\n", bpp);
+			return NULL;
+		}
+		rle = fn_rle8_to_bgra(dib, length, header_size, palette_entries, offset, (size_t)width, (size_t)height,
+		                      top_down);
+		if (rle == NULL) {
+			return NULL;
+		}
+		*out_width = (size_t)width;
+		*out_height = (size_t)height;
+		/* The rows were written straight into BGRA, so the conversion below must not run again. */
+		bgra = rle;
+		goto fn_bgra_ready;
+	}
 	if (offset + row_bytes * (size_t)height > length) {
 		fprintf(stderr, "CG-REFUSE: a %ldx%ld bitmap's pixels run past the end of its data\n", width, height);
 		return NULL;
@@ -252,6 +351,7 @@ CGImageRef cg_dib_decode(const unsigned char *dib, size_t length, size_t *out_wi
 			}
 		}
 	}
+fn_bgra_ready:
 	image = cg_image_from_bgra(bgra, (size_t)width, (size_t)height, (size_t)width * 4u, has_alpha);
 	free(bgra);
 	if (image != NULL) {
